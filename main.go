@@ -80,7 +80,9 @@ func main() {
 	startRotationMonitor()
 
 	log.Println("[INFO] Server listening on :3000")
-	http.ListenAndServe(":3000", nil)
+	if err := http.ListenAndServe(":3000", nil); err != nil {
+		log.Fatalf("[ERROR] Server failed: %v", err)
+	}
 }
 
 // ---------------------------
@@ -258,7 +260,11 @@ func handleInteractions(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ERROR] Failed to create secret verifier: %v", err)
 		return
 	}
-	sv.Write(body)
+	if _, err := sv.Write(body); err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("[ERROR] Failed to write body: %v", err)
+		return
+	}
 	if err := sv.Ensure(); err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		log.Printf("[ERROR] Failed to verify signature: %v", err)
@@ -677,7 +683,9 @@ func saveMentionSetting(mentionsRaw, channelID, userName string) error {
 	}
 
 	// 送信
-	api.PostMessage(channelID, slack.MsgOptionBlocks(blocks...))
+	if _, _, err := api.PostMessage(channelID, slack.MsgOptionBlocks(blocks...)); err != nil {
+		return fmt.Errorf("PostMessage failed: %w", err)
+	}
 
 	return nil
 }
@@ -746,7 +754,10 @@ func showInquiries(channelID, userID string) {
 	db.Order("created_at desc").Limit(10).Find(&inquiries)
 
 	if len(inquiries) == 0 {
-		api.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴はありません*", false))
+		if _, err := api.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴はありません*", false)); err != nil {
+			log.Printf("[ERROR] PostEphemeral failed: %v", err)
+		}
+
 		return
 	}
 
@@ -791,7 +802,10 @@ func showInquiries(channelID, userID string) {
 			false, false),
 	))
 
-	api.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...))
+	if _, err := api.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...)); err != nil {
+		log.Printf("[ERROR] PostEphemeral failed: %v", err)
+	}
+
 }
 
 // ---------------------------
@@ -929,10 +943,13 @@ func rotateMentions() {
 	}
 
 	// 送信
-	api.PostMessage(
+	if _, _, err := api.PostMessage(
 		defaultChannel,
 		slack.MsgOptionBlocks(blocks...),
-	)
+	); err != nil {
+		log.Printf("[ERROR] Failed to post rotation message: %v", err)
+		return
+	}
 
 	log.Printf("[INFO] mention setting rotated: %s", newCSV)
 }
