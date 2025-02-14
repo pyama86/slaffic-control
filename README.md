@@ -33,6 +33,17 @@ Slack イベント（メンションなど）を受け取り、Slack チャン�
 - /slack/interactions
 Slack のブロックキットからのインタラクション（フォーム送信など）を処理します。
 
+## 必要な OAuth スコープ
+
+`slaffic-control` を使用するには、以下の OAuth スコープが必要です：
+
+- `app_mentions:read`: `@slaffic-control` がメンションされているメッセージを表示する権限
+- `chat:write`: `@slaffic-control` としてメッセージを送信する権限
+- `usergroups:read`: ワークスペース内のユーザーグループを表示する権限
+- `users:read`: ワークスペース内のユーザーを表示する権限
+
+これらのスコープを設定することで、ボットが適切に機能します。
+
 ## ライセンス
 このプロジェクトは MIT ライセンスの下で公開されています。
 
