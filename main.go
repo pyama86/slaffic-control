@@ -79,8 +79,12 @@ func main() {
 	// 自動ローテーション
 	startRotationMonitor()
 
-	log.Println("[INFO] Server listening on :3000")
-	if err := http.ListenAndServe(":3000", nil); err != nil {
+	bind := ":3000"
+	if os.Getenv("LISTEN_SOCKET") != "" {
+		bind = os.Getenv("LISTEN_SOCKET")
+	}
+	log.Printf("[INFO] Server listening on %s", bind)
+	if err := http.ListenAndServe(bind, nil); err != nil {
 		log.Fatalf("[ERROR] Server failed: %v", err)
 	}
 }

@@ -22,6 +22,7 @@ export SLACK_SIGNING_SECRET=<your_slack_signing_secret>
 export SLACK_WORKSPACE_URL=<your_slack_workspace_url>
 export DB_PATH=<path_to_your_database>  # オプション、デフォルトは ./db/slaffic_control.db
 export DEFAULT_CHANNEL=<default_channel> # オプション、例: "#general"
+export LISTEN_SOCKET=<listen_socket> # オプション、デフォルトは ":3000"
 ```
 
 ## API エンドポイント

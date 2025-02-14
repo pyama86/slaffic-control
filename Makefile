@@ -1,5 +1,7 @@
 .PHONY: lint fmt
 LINTER := golangci-lint
+build:
+	go build -o bin/ .
 run:
 	go run .
 
