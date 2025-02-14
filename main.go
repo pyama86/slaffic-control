@@ -27,6 +27,7 @@ var (
 	userCache      *ttlcache.Cache[string, []slack.User]
 	groupCache     *ttlcache.Cache[string, []slack.UserGroup]
 	userInfoCache  *ttlcache.Cache[string, *slack.User]
+	selfID         string
 )
 
 type Inquiry struct {
@@ -148,8 +149,6 @@ func handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
-var selfID string
 
 func getBotUserID() string {
 	authResp, err := api.AuthTest()
