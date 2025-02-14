@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	ttlcache "github.com/jellydator/ttlcache/v3"
 	"github.com/jinzhu/gorm"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/slack-go/slack"
@@ -23,6 +24,9 @@ var (
 	signingSecret  = os.Getenv("SLACK_SIGNING_SECRET")
 	db             *gorm.DB
 	defaultChannel = os.Getenv("DEFAULT_CHANNEL") // 例: "#general"
+	userCache      *ttlcache.Cache[string, []slack.User]
+	groupCache     *ttlcache.Cache[string, []slack.UserGroup]
+	userInfoCache  *ttlcache.Cache[string, *slack.User]
 )
 
 type Inquiry struct {
@@ -44,17 +48,31 @@ type MentionSetting struct {
 
 func init() {
 	var err error
-	db, err = gorm.Open("sqlite3", "./taskbot.db")
+	dbpath := "./db/slaffic_control.db"
+	if os.Getenv("DB_PATH") != "" {
+		dbpath = os.Getenv("DB_PATH")
+	}
+	db, err = gorm.Open("sqlite3", dbpath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	db.AutoMigrate(&Inquiry{}, &MentionSetting{})
 
-	api = slack.New(os.Getenv("SLACK_BOT_TOKEN"))
-	selfID = getBotUserID(api)
 }
 
 func main() {
+	api = slack.New(os.Getenv("SLACK_BOT_TOKEN"))
+	selfID = getBotUserID()
+	userCache = ttlcache.New[string, []slack.User](
+		ttlcache.WithTTL[string, []slack.User](time.Hour),
+	)
+	groupCache = ttlcache.New[string, []slack.UserGroup](
+		ttlcache.WithTTL[string, []slack.UserGroup](time.Hour),
+	)
+	userInfoCache = ttlcache.New[string, *slack.User](
+		ttlcache.WithTTL[string, *slack.User](24 * time.Hour),
+	)
+
 	http.HandleFunc("/slack/events", handleSlackEvents)
 	http.HandleFunc("/slack/interactions", handleInteractions)
 
@@ -127,8 +145,7 @@ func handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 
 var selfID string
 
-// ボットのユーザーIDを取得する関数
-func getBotUserID(api *slack.Client) string {
+func getBotUserID() string {
 	authResp, err := api.AuthTest()
 	if err != nil {
 		log.Printf("[ERROR] Failed to get bot user ID: %v", err)
@@ -151,7 +168,7 @@ func handleMention(event *slackevents.AppMentionEvent) {
 		priority := "未設定"
 
 		// Slack API から投稿者の情報を取得
-		user, err := api.GetUserInfo(userID)
+		user, err := getUserInfo(userID)
 		if err != nil {
 			log.Printf("[ERROR] GetUserInfo failed: %v", err)
 		}
@@ -276,7 +293,7 @@ func handleInteractions(w http.ResponseWriter, r *http.Request) {
 		}
 
 	case slack.InteractionTypeViewSubmission:
-		user, err := api.GetUserInfo(callback.User.ID)
+		user, err := getUserInfo(callback.User.ID)
 		if err != nil {
 			log.Printf("[ERROR] GetUserInfo failed: %v", err)
 		}
@@ -348,11 +365,11 @@ func openInquiryModal(triggerID, channelID string) {
 					Type:     slack.OptTypeStatic,
 					ActionID: "priority_select",
 					Options: []*slack.OptionBlockObject{
-						slack.NewOptionBlockObject("normal",
+						slack.NewOptionBlockObject("低い",
 							slack.NewTextBlockObject("plain_text", "低い", false, false), nil),
-						slack.NewOptionBlockObject("high",
+						slack.NewOptionBlockObject("高い",
 							slack.NewTextBlockObject("plain_text", "高い", false, false), nil),
-						slack.NewOptionBlockObject("critical",
+						slack.NewOptionBlockObject("ウルトラ",
 							slack.NewTextBlockObject("plain_text", "ウルトラ", false, false), nil),
 					},
 					Placeholder: slack.NewTextBlockObject("plain_text", "選択してください", false, false),
@@ -413,7 +430,7 @@ func postInquiryRichMessage(channelID, priority, content string) (string, error)
 
 		first = ids[0]
 	}
-	var mention string
+	mention := "未設定"
 	if strings.HasPrefix(first, "S") {
 		mention = fmt.Sprintf("<!subteam^%s>", first) // グループメンション
 	} else if strings.HasPrefix(first, "U") {
@@ -520,14 +537,53 @@ func saveInquiry(message, timestamp, userID, userName string) {
 	})
 }
 
+func getUsers() ([]slack.User, error) {
+	cacheKey := "users"
+	if users := userCache.Get(cacheKey); users != nil {
+		return users.Value(), nil
+	}
+	users, err := api.GetUsers()
+	if err != nil {
+		return nil, err
+	}
+	userCache.Set(cacheKey, users, ttlcache.DefaultTTL)
+	return users, nil
+}
+
+func getUserGroups() ([]slack.UserGroup, error) {
+	cacheKey := "user_groups"
+	if groups := groupCache.Get(cacheKey); groups != nil {
+		return groups.Value(), nil
+	}
+	groups, err := api.GetUserGroups()
+	if err != nil {
+		return nil, err
+	}
+	groupCache.Set(cacheKey, groups, ttlcache.DefaultTTL)
+	return groups, nil
+}
+
+func getUserInfo(userID string) (*slack.User, error) {
+	cacheKey := "user_" + userID
+	if user := userInfoCache.Get(cacheKey); user != nil {
+		return user.Value(), nil
+	}
+	user, err := api.GetUserInfo(userID)
+	if err != nil {
+		return nil, err
+	}
+	userInfoCache.Set(cacheKey, user, ttlcache.DefaultTTL)
+	return user, nil
+}
+
 func saveMentionSetting(mentionsRaw, channelID, userName string) error {
 	parsed := parseCSV(mentionsRaw)
 
-	allUsers, err := api.GetUsers()
+	allUsers, err := getUsers()
 	if err != nil {
 		return fmt.Errorf("GetUsers failed: %w", err)
 	}
-	allGroups, err := api.GetUserGroups()
+	allGroups, err := getUserGroups()
 	if err != nil {
 		return fmt.Errorf("GetUserGroups failed: %w", err)
 	}
@@ -633,11 +689,11 @@ func reverseLookupMentionIDs(csv string) string {
 	}
 	ids := parseCSV(csv)
 
-	allUsers, err := api.GetUsers()
+	allUsers, err := getUsers()
 	if err != nil {
 		log.Printf("[WARN] GetUsers failed: %v", err)
 	}
-	allGroups, err := api.GetUserGroups()
+	allGroups, err := getUserGroups()
 	if err != nil {
 		log.Printf("[WARN] GetUserGroups failed: %v", err)
 	}
@@ -883,17 +939,16 @@ func rotateMentions() {
 
 // lookupRealNameOrHandle: "Uxxxx" or "Sxxxx" をユーザー/グループ名に変換
 func lookupRealNameOrHandle(id string) string {
-	fmt.Printf("lookupRealNameOrHandle: %s\n", id)
 	if strings.HasPrefix(id, "U") {
 		// user
-		u, err := api.GetUserInfo(id)
+		u, err := getUserInfo(id)
 
 		if err != nil {
 			return id
 		}
 		return u.RealName
 	} else if strings.HasPrefix(id, "S") {
-		groups, err := api.GetUserGroups()
+		groups, err := getUserGroups()
 		if err != nil {
 			return id
 		}
