@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,16 +19,40 @@ import (
 	"github.com/slack-go/slack/slackevents"
 )
 
-var (
-	api            = slack.New(os.Getenv("SLACK_BOT_TOKEN"))
-	signingSecret  = os.Getenv("SLACK_SIGNING_SECRET")
-	db             *gorm.DB
-	defaultChannel = os.Getenv("DEFAULT_CHANNEL") // 例: "#general"
-	userCache      *ttlcache.Cache[string, []slack.User]
-	groupCache     *ttlcache.Cache[string, []slack.UserGroup]
-	userInfoCache  *ttlcache.Cache[string, *slack.User]
-	selfID         string
-)
+var defaultChannel = os.Getenv("DEFAULT_CHANNEL")
+
+var selfID string
+
+type Handler struct {
+	client        SlackAPI
+	userCache     *ttlcache.Cache[string, []slack.User]
+	groupCache    *ttlcache.Cache[string, []slack.UserGroup]
+	userInfoCache *ttlcache.Cache[string, *slack.User]
+	db            *gorm.DB
+}
+
+func NewHandler() (*Handler, error) {
+	dbpath := "./db/slaffic_control.db"
+	if os.Getenv("DB_PATH") != "" {
+		dbpath = os.Getenv("DB_PATH")
+	}
+	db, err := gorm.Open("sqlite3", dbpath)
+	if err != nil {
+		return nil, err
+	}
+	if err := db.AutoMigrate(&Inquiry{}, &MentionSetting{}).Error; err != nil {
+		return nil, err
+	}
+
+	api := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
+	return &Handler{
+		client:        api,
+		userCache:     ttlcache.New[string, []slack.User](ttlcache.WithTTL[string, []slack.User](time.Hour)),
+		groupCache:    ttlcache.New[string, []slack.UserGroup](ttlcache.WithTTL[string, []slack.UserGroup](time.Hour)),
+		userInfoCache: ttlcache.New[string, *slack.User](ttlcache.WithTTL[string, *slack.User](24 * time.Hour)),
+		db:            db,
+	}, nil
+}
 
 type Inquiry struct {
 	ID        uint   `gorm:"primary_key"`
@@ -48,80 +72,85 @@ type MentionSetting struct {
 }
 
 func init() {
-	var err error
-	dbpath := "./db/slaffic_control.db"
-	if os.Getenv("DB_PATH") != "" {
-		dbpath = os.Getenv("DB_PATH")
+	requiredEnv := []string{
+		"SLACK_BOT_TOKEN",
+		"SLACK_SIGNING_SECRET",
 	}
-	db, err = gorm.Open("sqlite3", dbpath)
-	if err != nil {
-		log.Fatal(err)
+	for _, env := range requiredEnv {
+		if os.Getenv(env) == "" {
+			slog.Error("required environment variable not set", slog.String("env", env))
+			os.Exit(1)
+		}
 	}
-	db.AutoMigrate(&Inquiry{}, &MentionSetting{})
+}
 
+type SlackAPI interface {
+	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
+	OpenView(triggerID string, view slack.ModalViewRequest) (*slack.ViewResponse, error)
+	AuthTest() (*slack.AuthTestResponse, error)
+	GetUsers(options ...slack.GetUsersOption) ([]slack.User, error)
+	GetUserGroups(options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
+	GetUserInfo(userID string) (*slack.User, error)
+	PostEphemeral(channelID, userID string, options ...slack.MsgOption) (string, error)
 }
 
 func main() {
-	api = slack.New(os.Getenv("SLACK_BOT_TOKEN"))
-	selfID = getBotUserID()
-	userCache = ttlcache.New[string, []slack.User](
-		ttlcache.WithTTL[string, []slack.User](time.Hour),
-	)
-	groupCache = ttlcache.New[string, []slack.UserGroup](
-		ttlcache.WithTTL[string, []slack.UserGroup](time.Hour),
-	)
-	userInfoCache = ttlcache.New[string, *slack.User](
-		ttlcache.WithTTL[string, *slack.User](24 * time.Hour),
-	)
+	h, err := NewHandler()
+	if err != nil {
+		slog.Error("NewHandler failed", slog.Any("err", err))
+		os.Exit(1)
+	}
+	selfID = h.getBotUserID()
 
-	http.HandleFunc("/slack/events", handleSlackEvents)
-	http.HandleFunc("/slack/interactions", handleInteractions)
+	http.HandleFunc("/slack/events", h.handleSlackEvents)
+	http.HandleFunc("/slack/interactions", h.handleInteractions)
 
 	// 自動ローテーション
-	startRotationMonitor()
+	h.startRotationMonitor()
 
 	bind := ":3000"
 	if os.Getenv("LISTEN_SOCKET") != "" {
 		bind = os.Getenv("LISTEN_SOCKET")
 	}
-	log.Printf("[INFO] Server listening on %s", bind)
+	slog.Info("Server listening", slog.String("bind", bind))
 	if err := http.ListenAndServe(bind, nil); err != nil {
-		log.Fatalf("[ERROR] Server failed: %v", err)
+		slog.Error("Server failed", slog.Any("err", err))
+		os.Exit(1)
 	}
 }
 
 // ---------------------------
 // 1) イベントハンドラ
 // ---------------------------
-func handleSlackEvents(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("[ERROR] Fail to read request body: %v", err)
+		slog.Error("Failed to read request body", slog.Any("err", err))
 		return
 	}
 
-	sv, err := slack.NewSecretsVerifier(r.Header, signingSecret)
+	sv, err := slack.NewSecretsVerifier(r.Header, os.Getenv("SLACK_SIGNING_SECRET"))
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		log.Printf("[ERROR] Fail to verify SigningSecret: %v", err)
+		slog.Error("Failed to create secret verifier", slog.Any("err", err))
 		return
 	}
 	if _, err := sv.Write(body); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("[ERROR] Fail to write request body: %v", err)
+		slog.Error("Failed to write request body", slog.Any("err", err))
 		return
 	}
 	if err := sv.Ensure(); err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		log.Printf("[ERROR] Fail to verify SigningSecret: %v", err)
+		slog.Error("Failed to verify signature", slog.Any("err", err))
 		return
 	}
 
 	eventsAPIEvent, err := slackevents.ParseEvent(json.RawMessage(body), slackevents.OptionNoVerifyToken())
 	if err != nil {
-		log.Println(err)
+		slog.Error("Failed to parse event", slog.Any("err", err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -130,13 +159,13 @@ func handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 	case slackevents.URLVerification:
 		var res *slackevents.ChallengeResponse
 		if err := json.Unmarshal(body, &res); err != nil {
-			log.Println(err)
+			slog.Error("Failed to unmarshal challenge response", slog.Any("err", err))
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
 		if _, err := w.Write([]byte(res.Challenge)); err != nil {
-			log.Println(err)
+			slog.Error("Failed to write challenge response", slog.Any("err", err))
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -145,22 +174,13 @@ func handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		innerEvent := eventsAPIEvent.InnerEvent
 		switch event := innerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
-			handleMention(event)
+			h.handleMention(event)
 		}
 	}
 }
 
-func getBotUserID() string {
-	authResp, err := api.AuthTest()
-	if err != nil {
-		log.Printf("[ERROR] Failed to get bot user ID: %v", err)
-		return ""
-	}
-	return authResp.UserID
-}
-
 // メンションを受け取ったときの処理
-func handleMention(event *slackevents.AppMentionEvent) {
+func (h *Handler) handleMention(event *slackevents.AppMentionEvent) {
 	channelID := event.Channel
 	userID := event.User
 
@@ -173,9 +193,10 @@ func handleMention(event *slackevents.AppMentionEvent) {
 		priority := "未設定"
 
 		// Slack API から投稿者の情報を取得
-		user, err := getUserInfo(userID)
+		user, err := h.getUserInfo(userID)
 		if err != nil {
-			log.Printf("[ERROR] GetUserInfo failed: %v", err)
+			slog.Error("GetUserInfo failed", slog.Any("err", err))
+			return
 		}
 
 		// 投稿者の名前（表示名があれば優先）
@@ -185,14 +206,17 @@ func handleMention(event *slackevents.AppMentionEvent) {
 		}
 
 		// 問い合わせをリッチメッセージで投稿
-		timestamp, err := postInquiryRichMessage(channelID, priority, messageText)
+		timestamp, err := h.postInquiryRichMessage(channelID, priority, messageText)
 		if err != nil {
-			log.Printf("[ERROR] postInquiryRichMessage failed: %v", err)
+			slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
 			return
 		}
 
 		// 投稿者の情報も含めて問い合わせを保存
-		saveInquiry(messageText, timestamp, userID, userName)
+		if err := h.saveInquiry(messageText, timestamp, userID, userName); err != nil {
+			slog.Error("saveInquiry failed", slog.Any("err", err))
+			return
+		}
 
 		// ユーザーに問い合わせとして受理したことを通知
 		confirmationMsg := fmt.Sprintf(
@@ -200,12 +224,12 @@ func handleMention(event *slackevents.AppMentionEvent) {
 			userID, messageText, priority,
 		)
 
-		_, _, err = api.PostMessage(
+		_, _, err = h.client.PostMessage(
 			channelID,
 			slack.MsgOptionText(confirmationMsg, false),
 		)
 		if err != nil {
-			log.Printf("[ERROR] Failed to send confirmation message: %s", err)
+			slog.Error("Failed to send confirmation message", slog.Any("err", err))
 		}
 
 		return
@@ -218,14 +242,14 @@ func handleMention(event *slackevents.AppMentionEvent) {
 		newSectionBlock("section-3", "*メンションの設定を行う*", "mention_action", "設定する"),
 	}
 
-	_, err := api.PostEphemeral(
+	_, err := h.client.PostEphemeral(
 		channelID,
 		userID,
 		slack.MsgOptionText("メンションされたので、選択肢を表示します。", false),
 		slack.MsgOptionBlocks(blocks...),
 	)
 	if err != nil {
-		log.Printf("failed to post message with button: %s", err)
+		slog.Error("Failed to post message with button", slog.Any("err", err))
 	}
 }
 func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionBlock {
@@ -253,24 +277,24 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 // ---------------------------
 // 2) インタラクションハンドラ
 // ---------------------------
-func handleInteractions(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleInteractions(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	r.Body.Close()
 
-	sv, err := slack.NewSecretsVerifier(r.Header, signingSecret)
+	sv, err := slack.NewSecretsVerifier(r.Header, os.Getenv("SLACK_SIGNING_SECRET"))
 	if err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		log.Printf("[ERROR] Failed to create secret verifier: %v", err)
+		slog.Error("Failed to create secret verifier", slog.Any("err", err))
 		return
 	}
 	if _, err := sv.Write(body); err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
-		log.Printf("[ERROR] Failed to write body: %v", err)
+		slog.Error("Failed to write request body", slog.Any("err", err))
 		return
 	}
 	if err := sv.Ensure(); err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
-		log.Printf("[ERROR] Failed to verify signature: %v", err)
+		slog.Error("Failed to verify signature", slog.Any("err", err))
 		return
 	}
 
@@ -279,7 +303,7 @@ func handleInteractions(w http.ResponseWriter, r *http.Request) {
 
 	var callback slack.InteractionCallback
 	if err := json.Unmarshal([]byte(formData), &callback); err != nil {
-		log.Printf("[ERROR] Failed to unmarshal interaction: %v", err)
+		slog.Error("Failed to unmarshal interaction", slog.Any("err", err))
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
@@ -294,17 +318,23 @@ func handleInteractions(w http.ResponseWriter, r *http.Request) {
 
 		switch action.ActionID {
 		case "inquiry_action":
-			openInquiryModal(callback.TriggerID, callback.Channel.ID)
+			if err := h.openInquiryModal(callback.TriggerID, callback.Channel.ID); err != nil {
+				slog.Error("openInquiryModal failed", slog.Any("err", err))
+			}
 		case "history_action":
-			showInquiries(callback.Channel.ID, callback.User.ID)
+			if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
+				slog.Error("showInquiries failed", slog.Any("err", err))
+			}
 		case "mention_action":
-			openMentionSettingModal(callback.TriggerID, callback.Channel.ID)
+			if err := h.openMentionSettingModal(callback.TriggerID, callback.Channel.ID); err != nil {
+				slog.Error("openMentionSettingModal failed", slog.Any("err", err))
+			}
 		}
-
 	case slack.InteractionTypeViewSubmission:
-		user, err := getUserInfo(callback.User.ID)
+		user, err := h.getUserInfo(callback.User.ID)
 		if err != nil {
-			log.Printf("[ERROR] GetUserInfo failed: %v", err)
+			slog.Error("GetUserInfo failed", slog.Any("err", err))
+			return
 		}
 
 		// 投稿者の名前（表示名があれば優先）
@@ -318,19 +348,30 @@ func handleInteractions(w http.ResponseWriter, r *http.Request) {
 			inputValue := callback.View.State.Values["inquiry_block"]["inquiry_text"].Value
 			priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
 			channelID := callback.View.PrivateMetadata
-			t, err := postInquiryRichMessage(channelID, priority, inputValue)
+			t, err := h.postInquiryRichMessage(channelID, priority, inputValue)
 			if err != nil {
-				log.Printf("[ERROR] postInquiryRichMessage failed: %v", err)
+				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
+				return
 			}
 
-			saveInquiry(inputValue, t, callback.User.ID, userName)
+			h.saveInquiry(inputValue, t, callback.User.ID, userName)
 
 		case "mention_setting_modal":
 			mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
 			channelID := callback.View.PrivateMetadata
-			err := saveMentionSetting(mentionsRaw, channelID, userName)
+			err := h.saveMentionSetting(mentionsRaw, channelID, userName)
 			if err != nil {
-				log.Printf("[ERROR] saveMentionSetting failed: %v", err)
+				slog.Error("saveMentionSetting failed", slog.Any("err", err))
+				if _, err := h.client.PostEphemeral(
+					channelID,
+					callback.User.ID,
+					slack.MsgOptionText(
+						fmt.Sprintf(":warning: メンション設定の保存に失敗しました。\n```%s```", err.Error()),
+						false,
+					),
+				); err != nil {
+					slog.Error("Failed to post ephemeral message", slog.Any("err", err))
+				}
 			}
 		}
 	}
@@ -342,7 +383,7 @@ func handleInteractions(w http.ResponseWriter, r *http.Request) {
 // 3) モーダル生成
 // ---------------------------
 
-func openInquiryModal(triggerID, channelID string) {
+func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	titleText := slack.NewTextBlockObject("plain_text", "📩 問い合わせフォーム", false, false)
 	submitText := slack.NewTextBlockObject("plain_text", "✅ 送信", false, false)
 	closeText := slack.NewTextBlockObject("plain_text", "❌ キャンセル", false, false)
@@ -418,19 +459,20 @@ func openInquiryModal(triggerID, channelID string) {
 		PrivateMetadata: channelID,
 	}
 
-	if _, err := api.OpenView(triggerID, view); err != nil {
-		log.Printf("[ERROR] failed to open inquiry modal: %s", err)
-	}
+	_, err := h.client.OpenView(triggerID, view)
+	return err
 }
-func postInquiryRichMessage(channelID, priority, content string) (string, error) {
+func (h *Handler) postInquiryRichMessage(channelID, priority, content string) (string, error) {
 	var setting MentionSetting
-	db.Last(&setting)
+	if err := h.db.Last(&setting).Error; err != nil {
+		return "", err
+	}
 	first := "未設定"
 	if setting.ID != 0 && setting.Usernames != "" {
 
 		ids := parseCSV(setting.Usernames)
 		if len(ids) == 0 {
-			_, t, err := api.PostMessage(channelID, slack.MsgOptionText("*📩 新しい問い合わせが届きました*\n>>> "+content, false))
+			_, t, err := h.client.PostMessage(channelID, slack.MsgOptionText("*📩 新しい問い合わせが届きました*\n>>> "+content, false))
 			if err != nil {
 				return "", err
 			}
@@ -476,7 +518,7 @@ func postInquiryRichMessage(channelID, priority, content string) (string, error)
 	}
 
 	// 投稿
-	_, t, err := api.PostMessage(channelID, slack.MsgOptionBlocks(blocks...))
+	_, t, err := h.client.PostMessage(channelID, slack.MsgOptionBlocks(blocks...))
 	if err != nil {
 		return "", err
 	}
@@ -484,20 +526,30 @@ func postInquiryRichMessage(channelID, priority, content string) (string, error)
 }
 
 // 既存のメンション設定を取得
-func getLatestMentionSetting() MentionSetting {
+func (h *Handler) getLatestMentionSetting() (MentionSetting, error) {
 	var ms MentionSetting
-	db.Last(&ms)
-	return ms
+	if err := h.db.Last(&ms).Error; err != nil {
+		return ms, err
+	}
+
+	return ms, nil
 }
 
 // メンション設定モーダル
-func openMentionSettingModal(triggerID, channelID string) {
+func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 	titleText := slack.NewTextBlockObject("plain_text", "メンション設定", false, false)
 	submitText := slack.NewTextBlockObject("plain_text", "保存", false, false)
 	closeText := slack.NewTextBlockObject("plain_text", "キャンセル", false, false)
 
-	existing := getLatestMentionSetting()
-	initialValue := reverseLookupMentionIDs(existing.Usernames)
+	existing, err := h.getLatestMentionSetting()
+	if err != nil {
+		return err
+	}
+
+	initialValue, err := h.reverseLookupMentionIDs(existing.Usernames)
+	if err != nil {
+		return err
+	}
 
 	blocks := slack.Blocks{
 		BlockSet: []slack.Block{
@@ -528,75 +580,95 @@ func openMentionSettingModal(triggerID, channelID string) {
 		PrivateMetadata: channelID,
 	}
 
-	if _, err := api.OpenView(triggerID, view); err != nil {
-		log.Printf("[ERROR] failed to open mention setting modal: %s", err)
-	}
+	_, err = h.client.OpenView(triggerID, view)
+	return err
 }
 
 // ---------------------------
 // 4) 保存・投稿
 // ---------------------------
-func saveInquiry(message, timestamp, userID, userName string) {
-	db.Create(&Inquiry{
+func (h *Handler) saveInquiry(message, timestamp, userID, userName string) error {
+	return h.db.Create(&Inquiry{
 		Message:   message,
 		Timestamp: timestamp,
 		UserID:    userID,
 		UserName:  userName,
 		CreatedAt: time.Now(),
-	})
+	}).Error
 }
 
-func getUsers() ([]slack.User, error) {
+func (h *Handler) getUsers() ([]slack.User, error) {
 	cacheKey := "users"
-	if users := userCache.Get(cacheKey); users != nil {
+	if users := h.userCache.Get(cacheKey); users != nil {
 		return users.Value(), nil
 	}
-	users, err := api.GetUsers()
+	users, err := h.client.GetUsers()
 	if err != nil {
 		return nil, err
 	}
-	userCache.Set(cacheKey, users, ttlcache.DefaultTTL)
+	h.userCache.Set(cacheKey, users, ttlcache.DefaultTTL)
 	return users, nil
 }
 
-func getUserGroups() ([]slack.UserGroup, error) {
+func (h *Handler) getUserGroups() ([]slack.UserGroup, error) {
 	cacheKey := "user_groups"
-	if groups := groupCache.Get(cacheKey); groups != nil {
+	if groups := h.groupCache.Get(cacheKey); groups != nil {
 		return groups.Value(), nil
 	}
-	groups, err := api.GetUserGroups()
+	groups, err := h.client.GetUserGroups()
 	if err != nil {
 		return nil, err
 	}
-	groupCache.Set(cacheKey, groups, ttlcache.DefaultTTL)
+	h.groupCache.Set(cacheKey, groups, ttlcache.DefaultTTL)
 	return groups, nil
 }
 
-func getUserInfo(userID string) (*slack.User, error) {
+func (h *Handler) getUserInfo(userID string) (*slack.User, error) {
 	cacheKey := "user_" + userID
-	if user := userInfoCache.Get(cacheKey); user != nil {
+	if user := h.userInfoCache.Get(cacheKey); user != nil {
 		return user.Value(), nil
 	}
-	user, err := api.GetUserInfo(userID)
+	user, err := h.client.GetUserInfo(userID)
 	if err != nil {
 		return nil, err
 	}
-	userInfoCache.Set(cacheKey, user, ttlcache.DefaultTTL)
+	h.userInfoCache.Set(cacheKey, user, ttlcache.DefaultTTL)
 	return user, nil
 }
 
-func saveMentionSetting(mentionsRaw, channelID, userName string) error {
+// @名前 → ID の変換
+func (h *Handler) findUserOrGroupIDAndDisplayNameByName(name string) (string, string, error) {
+	users, err := h.getUsers()
+	if err != nil {
+		return "", "", err
+	}
+	groups, err := h.getUserGroups()
+	if err != nil {
+		return "", "", err
+	}
+
+	for _, u := range users {
+		if strings.EqualFold(u.Name, name) ||
+			strings.EqualFold(u.Profile.DisplayName, name) ||
+			strings.EqualFold(u.RealName, name) ||
+			strings.EqualFold(u.Profile.RealName, name) {
+			if u.Profile.DisplayName == "" {
+				return u.ID, u.RealName, nil
+			}
+			return u.ID, u.Profile.DisplayName, nil
+		}
+	}
+	for _, g := range groups {
+		if strings.EqualFold(g.Handle, name) ||
+			strings.EqualFold(g.Name, name) {
+			return g.ID, g.Name, nil
+		}
+	}
+	return "", "", fmt.Errorf("user or group not found")
+}
+
+func (h *Handler) saveMentionSetting(mentionsRaw, channelID, userName string) error {
 	parsed := parseCSV(mentionsRaw)
-
-	allUsers, err := getUsers()
-	if err != nil {
-		return fmt.Errorf("GetUsers failed: %w", err)
-	}
-	allGroups, err := getUserGroups()
-	if err != nil {
-		return fmt.Errorf("GetUserGroups failed: %w", err)
-	}
-
 	var results []string
 	var mentionList []string
 	for _, item := range parsed {
@@ -606,49 +678,28 @@ func saveMentionSetting(mentionsRaw, channelID, userName string) error {
 			continue
 		}
 
-		foundID := ""
-		displayName := nameOrGroup
+		foundID, displayName, err := h.findUserOrGroupIDAndDisplayNameByName(nameOrGroup)
+		if err != nil {
+			return fmt.Errorf("findUserOrGroupIDAndDisplayNameByName failed: %w", err)
+		}
 
-		// ユーザーを探す
-		for _, u := range allUsers {
-			if strings.EqualFold(u.Name, nameOrGroup) ||
-				strings.EqualFold(u.Profile.DisplayName, nameOrGroup) ||
-				strings.EqualFold(u.RealName, nameOrGroup) ||
-				strings.EqualFold(u.Profile.RealName, nameOrGroup) {
-				foundID = u.ID
-				displayName = u.Profile.DisplayName
-				if displayName == "" {
-					displayName = u.RealName
-				}
-				break
-			}
-		}
-		// 見つからなければグループ
 		if foundID == "" {
-			for _, grp := range allGroups {
-				if strings.EqualFold(grp.Handle, nameOrGroup) ||
-					strings.EqualFold(grp.Name, nameOrGroup) {
-					foundID = grp.ID // "Sxxxx"
-					displayName = grp.Name
-					break
-				}
-			}
-		}
-		if foundID == "" {
-			log.Printf("[WARN] '%s' not found", nameOrGroup)
-			continue
+			return fmt.Errorf("user or group not found: %s", nameOrGroup)
 		}
 		results = append(results, foundID)
 		mentionList = append(mentionList, fmt.Sprintf("%d. %s", len(mentionList)+1, displayName))
-
 	}
 
 	finalCSV := strings.Join(results, ",")
-	db.Delete(&MentionSetting{}, "1=1")
-	db.Create(&MentionSetting{
+	if err := h.db.Delete(&MentionSetting{}, "1=1").Error; err != nil {
+		return fmt.Errorf("Delete failed: %w", err)
+	}
+	if err := h.db.Create(&MentionSetting{
 		Usernames: finalCSV,
 		CreatedAt: time.Now(),
-	})
+	}).Error; err != nil {
+		return fmt.Errorf("Create failed: %w", err)
+	}
 
 	// 🔹 Block Kit メッセージ構築
 	blocks := []slack.Block{
@@ -686,7 +737,7 @@ func saveMentionSetting(mentionsRaw, channelID, userName string) error {
 	}
 
 	// 送信
-	if _, _, err := api.PostMessage(channelID, slack.MsgOptionBlocks(blocks...)); err != nil {
+	if _, _, err := h.client.PostMessage(channelID, slack.MsgOptionBlocks(blocks...)); err != nil {
 		return fmt.Errorf("PostMessage failed: %w", err)
 	}
 
@@ -694,19 +745,19 @@ func saveMentionSetting(mentionsRaw, channelID, userName string) error {
 }
 
 // IDs → @名前 の逆変換
-func reverseLookupMentionIDs(csv string) string {
+func (h *Handler) reverseLookupMentionIDs(csv string) (string, error) {
 	if csv == "" {
-		return ""
+		return "", nil
 	}
 	ids := parseCSV(csv)
 
-	allUsers, err := getUsers()
+	allUsers, err := h.getUsers()
 	if err != nil {
-		log.Printf("[WARN] GetUsers failed: %v", err)
+		return "", fmt.Errorf("GetUsers failed: %w", err)
 	}
-	allGroups, err := getUserGroups()
+	allGroups, err := h.getUserGroups()
 	if err != nil {
-		log.Printf("[WARN] GetUserGroups failed: %v", err)
+		return "", fmt.Errorf("GetUserGroups failed: %w", err)
 	}
 
 	var result []string
@@ -731,7 +782,7 @@ func reverseLookupMentionIDs(csv string) string {
 			result = append(result, "@"+id)
 		}
 	}
-	return strings.Join(result, ",")
+	return strings.Join(result, ","), nil
 }
 
 func findUserNameByID(userID string, allUsers []slack.User) string {
@@ -752,16 +803,18 @@ func findGroupHandleByID(gid string, groups []slack.UserGroup) string {
 	return ""
 }
 
-func showInquiries(channelID, userID string) {
+func (h *Handler) showInquiries(channelID, userID string) error {
 	var inquiries []Inquiry
-	db.Order("created_at desc").Limit(10).Find(&inquiries)
+	if h.db.Order("created_at desc").Limit(10).Find(&inquiries).Error != nil {
+		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
+			return err
+		}
+	}
 
 	if len(inquiries) == 0 {
-		if _, err := api.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴はありません*", false)); err != nil {
-			log.Printf("[ERROR] PostEphemeral failed: %v", err)
+		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴はありません*", false)); err != nil {
+			return err
 		}
-
-		return
 	}
 
 	blocks := []slack.Block{
@@ -805,10 +858,8 @@ func showInquiries(channelID, userID string) {
 			false, false),
 	))
 
-	if _, err := api.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...)); err != nil {
-		log.Printf("[ERROR] PostEphemeral failed: %v", err)
-	}
-
+	_, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...))
+	return err
 }
 
 // ---------------------------
@@ -830,19 +881,15 @@ func parseCSV(csv string) []string {
 	return result
 }
 
-// ---------------------------
-// 6) ローテーション
-// ---------------------------
-
 // startRotationMonitor: 日本時間の朝9時にローテーション
-func startRotationMonitor() {
+func (h *Handler) startRotationMonitor() {
 	dayStr := os.Getenv("ROTATION_DAY") // 0=日,1=月,...,6=土
 	if dayStr == "" {
 		dayStr = "1" // デフォルトは月曜日
 	}
 	desiredDay, err := strconv.Atoi(dayStr)
 	if err != nil || desiredDay < 0 || desiredDay > 6 {
-		log.Printf("[WARN] invalid ROTATION_DAY='%s', skip rotation", dayStr)
+		slog.Error("Invalid ROTATION_DAY", slog.Any("day", dayStr))
 		return
 	}
 
@@ -859,35 +906,34 @@ func startRotationMonitor() {
 
 			// 次の9時までの時間を計算してスリープ
 			sleepDuration := time.Until(nextRotation)
-			log.Printf("[INFO] 次のローテーションは %s に実行 (%.0f 秒後)", nextRotation, sleepDuration.Seconds())
+			slog.Info("Next rotation", slog.Any("next", nextRotation), slog.Any("sleep", sleepDuration))
 			time.Sleep(sleepDuration)
 
 			// 今日が指定された曜日ならローテーションを実行
 			now = time.Now().In(loc) // スリープ後に再取得
 			if int(now.Weekday()) == desiredDay {
-				log.Println("[INFO] ローテーションを実行します")
-				rotateMentions()
+				slog.Info("Rotation time has come, start rotation")
+				h.rotateMentions()
 			}
 		}
 	}()
 }
 
-func rotateMentions() {
-	if defaultChannel == "" {
-		log.Println("[WARN] DEFAULT_CHANNEL is not set, skip rotation message.")
-		return
-	}
+func (h *Handler) rotateMentions() {
 
 	var setting MentionSetting
-	db.Last(&setting)
+	if err := h.db.Last(&setting).Error; err != nil {
+		slog.Error("Failed to get latest mention setting", slog.Any("err", err))
+	}
+
 	if setting.ID == 0 || setting.Usernames == "" {
-		log.Println("[INFO] No mention setting found, skip rotation.")
+		slog.Info("No mention setting found, skip rotation")
 		return
 	}
 
 	ids := parseCSV(setting.Usernames)
 	if len(ids) < 2 {
-		log.Println("[INFO] Only one or none in mention setting, skip rotation.")
+		slog.Info("Not enough users/groups for rotation", slog.Any("count", len(ids)))
 		return
 	}
 
@@ -897,7 +943,15 @@ func rotateMentions() {
 	first = rotated[0]
 	newCSV := strings.Join(rotated, ",")
 	setting.Usernames = newCSV
-	db.Save(&setting)
+	if err := h.db.Save(&setting).Error; err != nil {
+		slog.Error("Failed to save new mention setting", slog.Any("err", err))
+		return
+	}
+
+	if defaultChannel == "" {
+		slog.Warn("No default channel set for rotation")
+		return
+	}
 
 	// メンション文字列
 	var mentionStr string
@@ -910,7 +964,7 @@ func rotateMentions() {
 	// 全員のハンドルネームを取得
 	allMentions := []string{}
 	for _, id := range rotated {
-		allMentions = append(allMentions, lookupRealNameOrHandle(id))
+		allMentions = append(allMentions, h.lookupRealNameOrHandle(id))
 	}
 
 	// 🎨 Block Kit メッセージ構築
@@ -946,29 +1000,28 @@ func rotateMentions() {
 	}
 
 	// 送信
-	if _, _, err := api.PostMessage(
+	if _, _, err := h.client.PostMessage(
 		defaultChannel,
 		slack.MsgOptionBlocks(blocks...),
 	); err != nil {
-		log.Printf("[ERROR] Failed to post rotation message: %v", err)
-		return
+		slog.Error("Failed to post rotation message", slog.Any("err", err))
 	}
+	slog.Info("Rotation completed", slog.Any("new", first), slog.Any("all", allMentions))
 
-	log.Printf("[INFO] mention setting rotated: %s", newCSV)
 }
 
 // lookupRealNameOrHandle: "Uxxxx" or "Sxxxx" をユーザー/グループ名に変換
-func lookupRealNameOrHandle(id string) string {
+func (h *Handler) lookupRealNameOrHandle(id string) string {
 	if strings.HasPrefix(id, "U") {
 		// user
-		u, err := getUserInfo(id)
+		u, err := h.getUserInfo(id)
 
 		if err != nil {
 			return id
 		}
 		return u.RealName
 	} else if strings.HasPrefix(id, "S") {
-		groups, err := getUserGroups()
+		groups, err := h.getUserGroups()
 		if err != nil {
 			return id
 		}
@@ -979,4 +1032,13 @@ func lookupRealNameOrHandle(id string) string {
 		}
 	}
 	return id
+}
+
+func (h *Handler) getBotUserID() string {
+	authResp, err := h.client.AuthTest()
+	if err != nil {
+		slog.Error("Failed to get bot user ID", slog.Any("err", err))
+		return ""
+	}
+	return authResp.UserID
 }

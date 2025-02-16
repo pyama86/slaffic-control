@@ -15,8 +15,16 @@ fmt:
 	gofmt -w .
 	goimports -w .
 
+test:
+	@echo ">> Running tests"
+	@rm -rf db/test.db
+	@DB_PATH=db/test.db SLACK_BOT_TOKEN=dummy SLACK_SIGNING_SECRET=dummy go test -v ./...
 
 devdeps:
 	@echo ">> Installing development dependencies"
 	which goimports > /dev/null || go install golang.org/x/tools/cmd/goimports@latest
 	which golangci-lint > /dev/null || go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	which mockgen > /dev/null || go install go.uber.org/mock/mockgen@latest
+
+mockgen:
+	mockgen -source=main.go -destination=slack_mock.go -package=main
