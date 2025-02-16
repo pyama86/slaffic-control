@@ -61,6 +61,7 @@ type Inquiry struct {
 	Timestamp string `gorm:"type:varchar(20)"`
 	UserID    string `gorm:"type:varchar(50)"`  // 投稿者の Slack ユーザー ID
 	UserName  string `gorm:"type:varchar(100)"` // 投稿者の名前
+	Done      bool
 	CreatedAt time.Time
 }
 
@@ -172,9 +173,28 @@ func (h *Handler) handleSlackEvents(w http.ResponseWriter, r *http.Request) {
 
 	case slackevents.CallbackEvent:
 		innerEvent := eventsAPIEvent.InnerEvent
+		slog.Info("Event received", slog.Any("event", innerEvent))
 		switch event := innerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
 			h.handleMention(event)
+		case *slackevents.ReactionAddedEvent:
+			if event.Reaction == "white_check_mark" {
+				err := h.db.Table("inquiries").Where("timestamp = ? AND channel_id = ?", event.Item.Timestamp, event.Item.Channel).Update("done", true).Error
+				if err != nil {
+					slog.Error("Failed to update inquiry", slog.Any("err", err))
+				} else {
+					slog.Info("Inquiry done", slog.String("timestamp", event.Item.Timestamp))
+				}
+			}
+		case *slackevents.ReactionRemovedEvent:
+			if event.Reaction == "white_check_mark" {
+				err := h.db.Table("inquiries").Where("timestamp = ? AND channel_id = ?", event.Item.Timestamp, event.Item.Channel).Update("done", false).Error
+				if err != nil {
+					slog.Error("Failed to restore inquiry", slog.Any("err", err))
+				} else {
+					slog.Info("Inquiry restored", slog.String("timestamp", event.Item.Timestamp))
+				}
+			}
 		}
 	}
 }
@@ -213,25 +233,10 @@ func (h *Handler) handleMention(event *slackevents.AppMentionEvent) {
 		}
 
 		// 投稿者の情報も含めて問い合わせを保存
-		if err := h.saveInquiry(messageText, timestamp, userID, userName); err != nil {
+		if err := h.saveInquiry(messageText, timestamp, channelID, userID, userName); err != nil {
 			slog.Error("saveInquiry failed", slog.Any("err", err))
 			return
 		}
-
-		// ユーザーに問い合わせとして受理したことを通知
-		confirmationMsg := fmt.Sprintf(
-			":white_check_mark: <@%s> さんの問い合わせを受け付けました。\n📝 内容: _%s_\n🔖 緊急度: *%s*",
-			userID, messageText, priority,
-		)
-
-		_, _, err = h.client.PostMessage(
-			channelID,
-			slack.MsgOptionText(confirmationMsg, false),
-		)
-		if err != nil {
-			slog.Error("Failed to send confirmation message", slog.Any("err", err))
-		}
-
 		return
 	}
 
@@ -354,7 +359,7 @@ func (h *Handler) handleInteractions(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			h.saveInquiry(inputValue, t, callback.User.ID, userName)
+			h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName)
 
 		case "mention_setting_modal":
 			mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
@@ -515,6 +520,11 @@ func (h *Handler) postInquiryRichMessage(channelID, priority, content string) (s
 			nil, nil,
 		),
 		slack.NewDividerBlock(),
+		// white_check_markリアクションについての説明
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "✅のリアクションを付けると、この問い合わせは履歴から表示されなくなります。", false, false),
+			nil, nil,
+		),
 	}
 
 	// 投稿
@@ -587,10 +597,11 @@ func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 // ---------------------------
 // 4) 保存・投稿
 // ---------------------------
-func (h *Handler) saveInquiry(message, timestamp, userID, userName string) error {
+func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName string) error {
 	return h.db.Create(&Inquiry{
 		Message:   message,
 		Timestamp: timestamp,
+		ChannelID: channelID,
 		UserID:    userID,
 		UserName:  userName,
 		CreatedAt: time.Now(),
@@ -805,7 +816,7 @@ func findGroupHandleByID(gid string, groups []slack.UserGroup) string {
 
 func (h *Handler) showInquiries(channelID, userID string) error {
 	var inquiries []Inquiry
-	if h.db.Order("created_at desc").Limit(10).Find(&inquiries).Error != nil {
+	if h.db.Where("done = ?", false).Order("created_at desc").Limit(10).Find(&inquiries).Error != nil {
 		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
 			return err
 		}

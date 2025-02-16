@@ -77,7 +77,7 @@ func TestHandler_handleMention(t *testing.T) {
 	handler, err := NewHandler()
 	assert.NoError(t, err)
 
-	mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).Times(2)
+	mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).Times(1)
 	mockClient.EXPECT().GetUserInfo("user_id").Return(&slack.User{Name: "user_name"}, nil).Times(1)
 
 	// メンション設定を保存しておく
@@ -115,10 +115,11 @@ func TestHandler_saveInquiry(t *testing.T) {
 
 	message := "test inquiry"
 	timestamp := "12345"
+	channelID := "channel_id"
 	userID := "user_id"
 	userName := "user_name"
 
-	err = handler.saveInquiry(message, timestamp, userID, userName)
+	err = handler.saveInquiry(message, timestamp, channelID, userID, userName)
 	assert.NoError(t, err)
 
 	var inquiry Inquiry
