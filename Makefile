@@ -1,7 +1,8 @@
-.PHONY: lint fmt
+.PHONY: lint fmt ci test devdeps mockgen
 LINTER := golangci-lint
 build:
 	go build -o bin/ .
+ci: lint test
 run:
 	go run .
 

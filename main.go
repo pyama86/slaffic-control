@@ -359,7 +359,10 @@ func (h *Handler) handleInteractions(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName)
+			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName); err != nil {
+				slog.Error("saveInquiry failed", slog.Any("err", err))
+				return
+			}
 
 		case "mention_setting_modal":
 			mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
