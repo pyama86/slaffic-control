@@ -43,6 +43,9 @@ func (d *DataBase) GetLatestInquiries() ([]model.Inquiry, error) {
 func (d *DataBase) GetMentionSetting(id string) (*model.MentionSetting, error) {
 	var setting model.MentionSetting
 	err := d.db.Where("bot_id = ?", id).First(&setting).Error
+	if err == gorm.ErrRecordNotFound {
+		return &setting, nil
+	}
 	return &setting, err
 }
 
@@ -51,6 +54,6 @@ func (d *DataBase) UpdateMentionSetting(id string, setting *model.MentionSetting
 	return d.db.Save(setting).Error
 }
 
-func (d *DataBase) UpdateInquiryDone(channelID, timestamp string, done bool) error {
+func (d *DataBase) UpdateInquiryDone(timestamp, channelID string, done bool) error {
 	return d.db.Model(&model.Inquiry{}).Where("channel_id = ? AND timestamp = ?", channelID, timestamp).Update("done", done).Error
 }

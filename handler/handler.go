@@ -692,12 +692,13 @@ func (h *Handler) lookupRealNameOrHandle(id string) string {
 }
 
 func (h *Handler) getBotUserID() string {
-	if h.botID != "" {
+	if h.botID == "" {
 		authResp, err := h.client.AuthTest()
 		if err != nil {
 			slog.Error("Failed to get bot user ID", slog.Any("err", err))
 			return ""
 		}
+
 		h.botID = authResp.UserID
 	}
 	return h.botID
