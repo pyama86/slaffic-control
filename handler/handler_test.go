@@ -1,4 +1,4 @@
-package main
+package handler
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pyama86/slaffic-control/model"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/stretchr/testify/assert"
@@ -59,7 +60,7 @@ func TestHandler_handleSlackEvents(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 
-	handler.handleSlackEvents(rr, req)
+	handler.HandleSlackEvents(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	assert.Equal(t, "test_challenge", rr.Body.String())
@@ -81,7 +82,7 @@ func TestHandler_handleMention(t *testing.T) {
 	mockClient.EXPECT().GetUserInfo("user_id").Return(&slack.User{Name: "user_name"}, nil).Times(1)
 
 	// メンション設定を保存しておく
-	mentions := MentionSetting{
+	mentions := model.MentionSetting{
 		Usernames: "user_id,group_id",
 	}
 	handler.db.Create(&mentions)
@@ -122,7 +123,7 @@ func TestHandler_saveInquiry(t *testing.T) {
 	err = handler.saveInquiry(message, timestamp, channelID, userID, userName)
 	assert.NoError(t, err)
 
-	var inquiry Inquiry
+	var inquiry model.Inquiry
 	handler.db.First(&inquiry)
 	assert.Equal(t, message, inquiry.Message)
 	assert.Equal(t, timestamp, inquiry.Timestamp)
@@ -172,7 +173,7 @@ func TestHandler_handleInteractions(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 
-	handler.handleInteractions(rr, req)
+	handler.HandleInteractions(rr, req)
 
 	assert.Equal(t, http.StatusOK, rr.Code)
 	if !ctrl.Satisfied() {

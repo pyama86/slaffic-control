@@ -19,7 +19,7 @@ fmt:
 test:
 	@echo ">> Running tests"
 	@rm -rf db/test.db
-	@DB_PATH=db/test.db SLACK_BOT_TOKEN=dummy SLACK_SIGNING_SECRET=dummy go test -v ./...
+	@DB_PATH=$(shell pwd)/db/test.db SLACK_BOT_TOKEN=dummy SLACK_SIGNING_SECRET=dummy go test -v ./...
 
 devdeps:
 	@echo ">> Installing development dependencies"
