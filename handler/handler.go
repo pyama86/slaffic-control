@@ -8,14 +8,13 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jellydator/ttlcache/v3"
-	"github.com/jinzhu/gorm"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/pyama86/slaffic-control/infra"
 	"github.com/pyama86/slaffic-control/model"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
@@ -38,35 +37,22 @@ type Handler struct {
 	userCache     *ttlcache.Cache[string, []slack.User]
 	groupCache    *ttlcache.Cache[string, []slack.UserGroup]
 	userInfoCache *ttlcache.Cache[string, *slack.User]
-	db            *gorm.DB
+	ds            infra.Datastore
 	botID         string
 }
 
 func NewHandler() (*Handler, error) {
-	dbpath := "./db/slaffic_control.db"
-	if os.Getenv("DB_PATH") != "" {
-		dbpath = os.Getenv("DB_PATH")
-	}
-	if !path.IsAbs(dbpath) {
-		dbpath = path.Join(os.Getenv("PWD"), dbpath)
-	}
-	fmt.Println("dbpath", dbpath)
-
-	db, err := gorm.Open("sqlite3", dbpath)
+	ds, err := infra.NewDataBase()
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&model.Inquiry{}, &model.MentionSetting{}).Error; err != nil {
-		return nil, err
-	}
-
 	api := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
 	return &Handler{
 		client:        api,
 		userCache:     ttlcache.New[string, []slack.User](ttlcache.WithTTL[string, []slack.User](time.Hour)),
 		groupCache:    ttlcache.New[string, []slack.UserGroup](ttlcache.WithTTL[string, []slack.UserGroup](time.Hour)),
 		userInfoCache: ttlcache.New[string, *slack.User](ttlcache.WithTTL[string, *slack.User](24 * time.Hour)),
-		db:            db,
+		ds:            ds,
 	}, nil
 }
 func (h *Handler) openInquiryModal(triggerID, channelID string) error {
@@ -149,12 +135,12 @@ func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	return err
 }
 func (h *Handler) postInquiryRichMessage(channelID, priority, content string) (string, error) {
-	var setting model.MentionSetting
-	if err := h.db.Last(&setting).Error; err != nil {
+	setting, err := h.ds.GetMentionSetting(h.getBotUserID())
+	if err != nil {
 		return "", err
 	}
 	first := "未設定"
-	if setting.ID != 0 && setting.Usernames != "" {
+	if setting.BotID != "" && setting.Usernames != "" {
 
 		ids := parseCSV(setting.Usernames)
 		if len(ids) == 0 {
@@ -216,21 +202,12 @@ func (h *Handler) postInquiryRichMessage(channelID, priority, content string) (s
 	return t, nil
 }
 
-func (h *Handler) getLatestMentionSetting() (model.MentionSetting, error) {
-	var ms model.MentionSetting
-	if err := h.db.Last(&ms).Error; err != nil {
-		return ms, err
-	}
-
-	return ms, nil
-}
-
 func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 	titleText := slack.NewTextBlockObject("plain_text", "メンション設定", false, false)
 	submitText := slack.NewTextBlockObject("plain_text", "保存", false, false)
 	closeText := slack.NewTextBlockObject("plain_text", "キャンセル", false, false)
 
-	existing, err := h.getLatestMentionSetting()
+	existing, err := h.ds.GetMentionSetting(h.getBotUserID())
 	if err != nil {
 		return err
 	}
@@ -274,14 +251,14 @@ func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 }
 
 func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName string) error {
-	return h.db.Create(&model.Inquiry{
+	return h.ds.SaveInquiry(&model.Inquiry{
 		Message:   message,
 		Timestamp: timestamp,
 		ChannelID: channelID,
 		UserID:    userID,
 		UserName:  userName,
 		CreatedAt: time.Now(),
-	}).Error
+	})
 }
 
 func (h *Handler) getUsers() ([]slack.User, error) {
@@ -378,13 +355,10 @@ func (h *Handler) saveMentionSetting(mentionsRaw, channelID, userName string) er
 	}
 
 	finalCSV := strings.Join(results, ",")
-	if err := h.db.Delete(&model.MentionSetting{}, "1=1").Error; err != nil {
-		return fmt.Errorf("Delete failed: %w", err)
-	}
-	if err := h.db.Create(&model.MentionSetting{
+	if err := h.ds.UpdateMentionSetting(h.getBotUserID(), &model.MentionSetting{
 		Usernames: finalCSV,
 		CreatedAt: time.Now(),
-	}).Error; err != nil {
+	}); err != nil {
 		return fmt.Errorf("Create failed: %w", err)
 	}
 
@@ -491,8 +465,8 @@ func findGroupHandleByID(gid string, groups []slack.UserGroup) string {
 }
 
 func (h *Handler) showInquiries(channelID, userID string) error {
-	var inquiries []model.Inquiry
-	if h.db.Where("done = ?", false).Order("created_at desc").Limit(10).Find(&inquiries).Error != nil {
+	inquiries, err := h.ds.GetLatestInquiries()
+	if err != nil {
 		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
 			return err
 		}
@@ -545,7 +519,7 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 			false, false),
 	))
 
-	_, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...))
+	_, err = h.client.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...))
 	return err
 }
 
@@ -604,13 +578,12 @@ func (h *Handler) StartRotationMonitor() {
 }
 
 func (h *Handler) rotateMentions() {
-
-	var setting model.MentionSetting
-	if err := h.db.Last(&setting).Error; err != nil {
+	setting, err := h.ds.GetMentionSetting(h.getBotUserID())
+	if err != nil {
 		slog.Error("Failed to get latest mention setting", slog.Any("err", err))
 	}
 
-	if setting.ID == 0 || setting.Usernames == "" {
+	if setting.BotID == "" || setting.Usernames == "" {
 		slog.Info("No mention setting found, skip rotation")
 		return
 	}
@@ -627,7 +600,7 @@ func (h *Handler) rotateMentions() {
 	first = rotated[0]
 	newCSV := strings.Join(rotated, ",")
 	setting.Usernames = newCSV
-	if err := h.db.Save(&setting).Error; err != nil {
+	if err := h.ds.UpdateMentionSetting(h.getBotUserID(), setting); err != nil {
 		slog.Error("Failed to save new mention setting", slog.Any("err", err))
 		return
 	}
@@ -786,8 +759,7 @@ func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
 			h.handleMention(event)
 		case *slackevents.ReactionAddedEvent:
 			if event.Reaction == "white_check_mark" {
-				err := h.db.Table("inquiries").Where("timestamp = ? AND channel_id = ?", event.Item.Timestamp, event.Item.Channel).Update("done", true).Error
-				if err != nil {
+				if err := h.ds.UpdateInquiryDone(event.Item.Timestamp, event.Item.Channel, true); err != nil {
 					slog.Error("Failed to update inquiry", slog.Any("err", err))
 				} else {
 					slog.Info("Inquiry done", slog.String("timestamp", event.Item.Timestamp))
@@ -795,8 +767,7 @@ func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		case *slackevents.ReactionRemovedEvent:
 			if event.Reaction == "white_check_mark" {
-				err := h.db.Table("inquiries").Where("timestamp = ? AND channel_id = ?", event.Item.Timestamp, event.Item.Channel).Update("done", false).Error
-				if err != nil {
+				if err := h.ds.UpdateInquiryDone(event.Item.Timestamp, event.Item.Channel, false); err != nil {
 					slog.Error("Failed to restore inquiry", slog.Any("err", err))
 				} else {
 					slog.Info("Inquiry restored", slog.String("timestamp", event.Item.Timestamp))

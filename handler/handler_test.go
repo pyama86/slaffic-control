@@ -85,7 +85,7 @@ func TestHandler_handleMention(t *testing.T) {
 	mentions := model.MentionSetting{
 		Usernames: "user_id,group_id",
 	}
-	handler.db.Create(&mentions)
+	handler.ds.UpdateMentionSetting("", &mentions)
 
 	handler.client = mockClient
 
@@ -112,7 +112,6 @@ func TestHandler_saveInquiry(t *testing.T) {
 
 	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: "bot_id"}, nil).AnyTimes()
 	handler.client = mockClient
-	handler.db.Exec("DELETE FROM inquiries")
 
 	message := "test inquiry"
 	timestamp := "12345"
@@ -123,8 +122,9 @@ func TestHandler_saveInquiry(t *testing.T) {
 	err = handler.saveInquiry(message, timestamp, channelID, userID, userName)
 	assert.NoError(t, err)
 
-	var inquiry model.Inquiry
-	handler.db.First(&inquiry)
+	inquiries, err := handler.ds.GetLatestInquiries()
+	inquiry := inquiries[0]
+
 	assert.Equal(t, message, inquiry.Message)
 	assert.Equal(t, timestamp, inquiry.Timestamp)
 	assert.Equal(t, userID, inquiry.UserID)
