@@ -7,7 +7,6 @@ on:
     branches: [ main ]
 
 jobs:
-
   build:
     name: build
     runs-on: ubuntu-latest
@@ -20,5 +19,16 @@ jobs:
       with:
         go-version-file: 'go.mod'
 
-    - name: Test
+    - name: Test for sqlite
       run: make ci
+
+    - name: Test for dynamodb
+      run: make ci
+      env:
+        DB_DRIVER: dynamodb
+        DYNAMO_LOCAL: 1
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local:latest
+        ports:
+          - 8000:8000

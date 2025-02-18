@@ -111,7 +111,7 @@ func TestHandler_saveInquiry(t *testing.T) {
 	handler, err := NewHandler()
 	assert.NoError(t, err)
 
-	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: "bot_id"}, nil).AnyTimes()
+	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: "bot_id_save"}, nil).AnyTimes()
 	handler.client = mockClient
 
 	message := "test inquiry"
@@ -123,7 +123,7 @@ func TestHandler_saveInquiry(t *testing.T) {
 	err = handler.saveInquiry(message, timestamp, channelID, userID, userName)
 	assert.NoError(t, err)
 
-	inquiries, err := handler.ds.GetLatestInquiries("bot_id")
+	inquiries, err := handler.ds.GetLatestInquiries("bot_id_save")
 	inquiry := inquiries[0]
 
 	assert.Equal(t, message, inquiry.Message)
