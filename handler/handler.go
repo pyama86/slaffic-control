@@ -42,10 +42,20 @@ type Handler struct {
 }
 
 func NewHandler() (*Handler, error) {
-	ds, err := infra.NewDataBase()
-	if err != nil {
-		return nil, err
+	var ds infra.Datastore
+	var err error
+	if os.Getenv("DB_DRIVER") == "dynamodb" {
+		ds, err = infra.NewDynamoDB()
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		ds, err = infra.NewDataBase()
+		if err != nil {
+			return nil, err
+		}
 	}
+
 	api := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
 	return &Handler{
 		client:        api,
@@ -252,6 +262,7 @@ func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 
 func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName string) error {
 	return h.ds.SaveInquiry(&model.Inquiry{
+		BotID:     h.getBotUserID(),
 		Message:   message,
 		Timestamp: timestamp,
 		ChannelID: channelID,
@@ -328,7 +339,7 @@ func (h *Handler) findUserOrGroupIDAndDisplayNameByName(name string) (string, st
 			return g.ID, g.Name, nil
 		}
 	}
-	return "", "", fmt.Errorf("user or group not found")
+	return "", "", fmt.Errorf("user or group not found: %s", name)
 }
 
 func (h *Handler) saveMentionSetting(mentionsRaw, channelID, userName string) error {
@@ -465,17 +476,19 @@ func findGroupHandleByID(gid string, groups []slack.UserGroup) string {
 }
 
 func (h *Handler) showInquiries(channelID, userID string) error {
-	inquiries, err := h.ds.GetLatestInquiries()
+	inquiries, err := h.ds.GetLatestInquiries(h.getBotUserID())
 	if err != nil {
 		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
 			return err
 		}
+		return err
 	}
 
 	if len(inquiries) == 0 {
 		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴はありません*", false)); err != nil {
 			return err
 		}
+		return nil
 	}
 
 	blocks := []slack.Block{
@@ -760,7 +773,7 @@ func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
 			h.handleMention(event)
 		case *slackevents.ReactionAddedEvent:
 			if event.Reaction == "white_check_mark" {
-				if err := h.ds.UpdateInquiryDone(event.Item.Timestamp, event.Item.Channel, true); err != nil {
+				if err := h.ds.UpdateInquiryDone(h.getBotUserID(), event.Item.Timestamp, true); err != nil {
 					slog.Error("Failed to update inquiry", slog.Any("err", err))
 				} else {
 					slog.Info("Inquiry done", slog.String("timestamp", event.Item.Timestamp))
@@ -768,7 +781,7 @@ func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
 			}
 		case *slackevents.ReactionRemovedEvent:
 			if event.Reaction == "white_check_mark" {
-				if err := h.ds.UpdateInquiryDone(event.Item.Timestamp, event.Item.Channel, false); err != nil {
+				if err := h.ds.UpdateInquiryDone(h.getBotUserID(), event.Item.Timestamp, false); err != nil {
 					slog.Error("Failed to restore inquiry", slog.Any("err", err))
 				} else {
 					slog.Info("Inquiry restored", slog.String("timestamp", event.Item.Timestamp))

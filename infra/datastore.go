@@ -6,7 +6,7 @@ type Datastore interface {
 	// 問い合わせを保存する
 	SaveInquiry(*model.Inquiry) error
 	// 未完了の最新の10件のInquiryを取得する
-	GetLatestInquiries() ([]model.Inquiry, error)
+	GetLatestInquiries(string) ([]model.Inquiry, error)
 	// 問い合わせを完了か未完了に更新する
 	UpdateInquiryDone(string, string, bool) error
 
