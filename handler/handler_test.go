@@ -5,17 +5,20 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pyama86/slaffic-control/model"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/slacktest"
 	"github.com/stretchr/testify/assert"
 	gomock "go.uber.org/mock/gomock"
 )
@@ -181,5 +184,203 @@ func TestHandler_handleInteractions(t *testing.T) {
 	if !ctrl.Satisfied() {
 		t.Errorf("Not all expectations were met")
 	}
+}
 
+func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
+	var postEphemeralRequests []map[string]interface{}
+	botID := randomString(10)
+	server := slacktest.NewTestServer(func(c slacktest.Customize) {
+		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+		}))
+
+		c.Handle("/chat.postEphemeral", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// まずは parse する
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("failed to parse form: %v", err)
+			}
+			channel := r.FormValue("channel")
+			user := r.FormValue("user")
+			blocksJSON := r.FormValue("blocks")
+
+			var blocks []map[string]interface{}
+			if err := json.Unmarshal([]byte(blocksJSON), &blocks); err != nil {
+				t.Errorf("failed to unmarshal blocks JSON: %v", err)
+			}
+
+			data := map[string]interface{}{
+				"channel": channel,
+				"user":    user,
+				"blocks":  blocks,
+			}
+			postEphemeralRequests = append(postEphemeralRequests, data)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
+		}))
+	})
+
+	go server.Start()
+	defer server.Stop()
+
+	api := slack.New(
+		"dummy-token",
+		slack.OptionAPIURL(server.GetAPIURL()),
+	)
+
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = api
+
+	_ = h.getBotUserID()
+
+	for i := 0; i < 11; i++ {
+		_ = h.ds.SaveInquiry(&model.Inquiry{
+			BotID:     botID,
+			Message:   fmt.Sprintf("message #%d", i),
+			Timestamp: fmt.Sprintf("99999999%d.000000", i),
+			ChannelID: "test-channel",
+			UserID:    "test-user",
+			UserName:  "Tester",
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	err = h.showInquiries("test-channel", "test-user")
+	assert.NoError(t, err, "showInquiries should not fail")
+
+	assert.Len(t, postEphemeralRequests, 1, "Ephemeralメッセージは1回のみ呼ばれるはず")
+
+	req := postEphemeralRequests[0]
+	assert.Equal(t, "test-channel", req["channel"])
+	assert.Equal(t, "test-user", req["user"])
+
+	blocks, ok := req["blocks"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("blocks is not an array of map: %T", req["blocks"])
+	}
+
+	// blocks の中で "📝" と "📅" が含まれるSectionが問い合わせ行とみなす
+	var inquiryCount int
+	for _, b := range blocks {
+		typ, _ := b["type"].(string)
+		if typ == "section" {
+			textObj, _ := b["text"].(map[string]interface{})
+			txt, _ := textObj["text"].(string)
+			if strings.Contains(txt, "📝") && strings.Contains(txt, "📅") {
+				inquiryCount++
+			}
+		}
+	}
+	assert.Equal(t, 10, inquiryCount, "最新10件のみ表示されるはず")
+}
+
+func randomString(n int) string {
+	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = letters[int(time.Now().UnixNano())%len(letters)]
+	}
+	return string(b)
+}
+func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
+	var postEphemeralRequests []map[string]interface{}
+	botID := randomString(10)
+
+	server := slacktest.NewTestServer(func(c slacktest.Customize) {
+		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+		}))
+
+		c.Handle("/chat.postEphemeral", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// まずは parse する
+			if err := r.ParseForm(); err != nil {
+				t.Errorf("failed to parse form: %v", err)
+			}
+			channel := r.FormValue("channel")
+			user := r.FormValue("user")
+			blocksJSON := r.FormValue("blocks")
+
+			var blocks []map[string]interface{}
+			if err := json.Unmarshal([]byte(blocksJSON), &blocks); err != nil {
+				t.Errorf("failed to unmarshal blocks JSON: %v", err)
+			}
+
+			data := map[string]interface{}{
+				"channel": channel,
+				"user":    user,
+				"blocks":  blocks,
+			}
+			postEphemeralRequests = append(postEphemeralRequests, data)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
+		}))
+	})
+
+	go server.Start()
+	defer server.Stop()
+
+	api := slack.New(
+		"dummy-token",
+		slack.OptionAPIURL(server.GetAPIURL()),
+	)
+
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = api
+
+	_ = h.getBotUserID()
+
+	// 11 件の問い合わせを作成
+	for i := 0; i < 11; i++ {
+		_ = h.ds.SaveInquiry(&model.Inquiry{
+			BotID:     botID,
+			Message:   fmt.Sprintf("message #%d", i),
+			Timestamp: fmt.Sprintf("99999999%d.000000", i),
+			ChannelID: "test-channel",
+			UserID:    "test-user",
+			UserName:  "Tester",
+			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
+		})
+	}
+
+	// 3件の問い合わせを "done" にする (最新3件)
+	for i := 8; i < 11; i++ {
+		ts := fmt.Sprintf("99999999%d.000000", i)
+		err := h.ds.UpdateInquiryDone(botID, ts, true)
+		assert.NoError(t, err, "UpdateInquiryDone should not fail")
+	}
+
+	err = h.showInquiries("test-channel", "test-user")
+	assert.NoError(t, err, "showInquiries should not fail")
+
+	assert.Len(t, postEphemeralRequests, 1, "Ephemeralメッセージは1回のみ呼ばれるはず")
+
+	req := postEphemeralRequests[0]
+	assert.Equal(t, "test-channel", req["channel"])
+	assert.Equal(t, "test-user", req["user"])
+
+	blocks, ok := req["blocks"].([]map[string]interface{})
+	if !ok {
+		t.Fatalf("blocks is not an array of map: %T", req["blocks"])
+	}
+
+	// blocks の中で "📝" と "📅" が含まれるSectionが問い合わせ行とみなす
+	var inquiryCount int
+	for _, b := range blocks {
+		typ, _ := b["type"].(string)
+		if typ == "section" {
+			textObj, _ := b["text"].(map[string]interface{})
+			txt, _ := textObj["text"].(string)
+			if strings.Contains(txt, "📝") && strings.Contains(txt, "📅") {
+				inquiryCount++
+			}
+		}
+	}
+
+	// 11件中 3件を "done" にしたので、表示されるのは 8件のはず
+	assert.Equal(t, 8, inquiryCount, "未完了の問い合わせのみ表示されるべき")
 }
