@@ -16,6 +16,10 @@
             {
                 "AttributeName": "timestamp",
                 "AttributeType": "S"
+            },
+            {
+                "AttributeName": "done",
+                "AttributeType": "N"
             }
         ],
         "TableName": "slaffic_control_inquiries",
@@ -27,6 +31,25 @@
             {
                 "AttributeName": "timestamp",
                 "KeyType": "RANGE"
+            }
+        ],
+        "GlobalSecondaryIndexes": [
+            {
+                "IndexName": "BotIdDoneIndex",
+                "KeySchema": [
+                    {
+                        "AttributeName": "bot_id",
+                        "KeyType": "HASH"
+                    },
+                    {
+                        "AttributeName": "done",
+                        "KeyType": "RANGE"
+                    }
+                ],
+                "Projection": {
+                    "ProjectionType": "ALL"
+                },
+                "IndexStatus": "ACTIVE",
             }
         ],
     }
