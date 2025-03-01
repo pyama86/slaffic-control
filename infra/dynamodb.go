@@ -59,98 +59,118 @@ func NewDynamoDB() (*DynamoDB, error) {
 	return d, nil
 }
 
-func (d *DynamoDB) EnsureTable() error {
-	tableName := tableNamePrefix + "_inquiries"
+const (
+	waitInterval = 2 * time.Second // ポーリング間隔
+	maxRetries   = 30              // 最大リトライ回数 (30回 = 約1分)
+)
 
+func (d *DynamoDB) EnsureTable() error {
+	tableNames := []string{
+		tableNamePrefix + "_inquiries",
+		tableNamePrefix + "_mention_settings",
+	}
+
+	for _, tableName := range tableNames {
+		if err := d.ensureSingleTable(tableName); err != nil {
+			return fmt.Errorf("failed to ensure table %s: %v", tableName, err)
+		}
+	}
+
+	return nil
+}
+
+func (d *DynamoDB) ensureSingleTable(tableName string) error {
 	_, err := d.db.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{
 		TableName: aws.String(tableName),
 	})
 	if err == nil {
+		// テーブルが既に存在する
 		return nil
 	}
 
-	_, err = d.db.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
-		TableName: aws.String(tableName),
-		AttributeDefinitions: []types.AttributeDefinition{
-			{
-				AttributeName: aws.String("bot_id"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("timestamp"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-			{
-				AttributeName: aws.String("done"),
-				AttributeType: types.ScalarAttributeTypeN,
-			},
-		},
-		KeySchema: []types.KeySchemaElement{
-			{
-				AttributeName: aws.String("bot_id"),
-				KeyType:       types.KeyTypeHash, // Partition Key
-			},
-			{
-				AttributeName: aws.String("timestamp"),
-				KeyType:       types.KeyTypeRange, // Sort Key
-			},
-		},
-		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
-			{
-				IndexName: aws.String("BotIdDoneIndex"),
-				KeySchema: []types.KeySchemaElement{
-					{
-						AttributeName: aws.String("bot_id"),
-						KeyType:       types.KeyTypeHash, // Partition Key
-					},
-					{
-						AttributeName: aws.String("done"),
-						KeyType:       types.KeyTypeRange, // Sort Key
-					},
-				},
-				Projection: &types.Projection{
-					ProjectionType: types.ProjectionTypeAll,
-				},
-				ProvisionedThroughput: &types.ProvisionedThroughput{
-					ReadCapacityUnits:  aws.Int64(5),
-					WriteCapacityUnits: aws.Int64(5),
-				},
-			},
-		},
-		ProvisionedThroughput: &types.ProvisionedThroughput{
-			ReadCapacityUnits:  aws.Int64(5),
-			WriteCapacityUnits: aws.Int64(5),
-		},
-	})
+	// テーブルを作成
+	err = d.createTable(tableName)
 	if err != nil {
-		return fmt.Errorf("failed to create Inquiries table: %v", err)
+		return err
 	}
 
-	tableName = tableNamePrefix + "_mention_settings"
-	_, err = d.db.CreateTable(context.TODO(), &dynamodb.CreateTableInput{
-		TableName: aws.String(tableName),
-		AttributeDefinitions: []types.AttributeDefinition{
-			{
-				AttributeName: aws.String("bot_id"),
-				AttributeType: types.ScalarAttributeTypeS,
-			},
-		},
-		KeySchema: []types.KeySchemaElement{
-			{
-				AttributeName: aws.String("bot_id"),
-				KeyType:       types.KeyTypeHash,
-			},
-		},
-		ProvisionedThroughput: &types.ProvisionedThroughput{
-			ReadCapacityUnits:  aws.Int64(5),
-			WriteCapacityUnits: aws.Int64(5),
-		},
-	})
-	if err != nil {
-		return fmt.Errorf("failed to create MentionSettings table: %v", err)
+	// テーブルがACTIVEになるまで待機
+	for i := 0; i < maxRetries; i++ {
+		out, err := d.db.DescribeTable(context.TODO(), &dynamodb.DescribeTableInput{
+			TableName: aws.String(tableName),
+		})
+		if err != nil {
+			return fmt.Errorf("failed to describe table %s: %v", tableName, err)
+		}
+
+		if out.Table.TableStatus == types.TableStatusActive {
+			return nil
+		}
+
+		time.Sleep(waitInterval)
 	}
 
-	return fmt.Errorf("table creation timeout")
+	return fmt.Errorf("table %s creation timed out", tableName)
+}
+
+func (d *DynamoDB) createTable(tableName string) error {
+	var createTableInput *dynamodb.CreateTableInput
+
+	if tableName == tableNamePrefix+"_inquiries" {
+		createTableInput = &dynamodb.CreateTableInput{
+			TableName: aws.String(tableName),
+			AttributeDefinitions: []types.AttributeDefinition{
+				{AttributeName: aws.String("bot_id"), AttributeType: types.ScalarAttributeTypeS},
+				{AttributeName: aws.String("timestamp"), AttributeType: types.ScalarAttributeTypeS},
+				{AttributeName: aws.String("done"), AttributeType: types.ScalarAttributeTypeN},
+			},
+			KeySchema: []types.KeySchemaElement{
+				{AttributeName: aws.String("bot_id"), KeyType: types.KeyTypeHash},
+				{AttributeName: aws.String("timestamp"), KeyType: types.KeyTypeRange},
+			},
+			GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
+				{
+					IndexName: aws.String("BotIdDoneIndex"),
+					KeySchema: []types.KeySchemaElement{
+						{AttributeName: aws.String("bot_id"), KeyType: types.KeyTypeHash},
+						{AttributeName: aws.String("done"), KeyType: types.KeyTypeRange},
+					},
+					Projection: &types.Projection{ProjectionType: types.ProjectionTypeAll},
+					ProvisionedThroughput: &types.ProvisionedThroughput{
+						ReadCapacityUnits:  aws.Int64(5),
+						WriteCapacityUnits: aws.Int64(5),
+					},
+				},
+			},
+			ProvisionedThroughput: &types.ProvisionedThroughput{
+				ReadCapacityUnits:  aws.Int64(5),
+				WriteCapacityUnits: aws.Int64(5),
+			},
+		}
+	} else if tableName == tableNamePrefix+"_mention_settings" {
+		createTableInput = &dynamodb.CreateTableInput{
+			TableName: aws.String(tableName),
+			AttributeDefinitions: []types.AttributeDefinition{
+				{AttributeName: aws.String("bot_id"), AttributeType: types.ScalarAttributeTypeS},
+			},
+			KeySchema: []types.KeySchemaElement{
+				{AttributeName: aws.String("bot_id"), KeyType: types.KeyTypeHash},
+			},
+			ProvisionedThroughput: &types.ProvisionedThroughput{
+				ReadCapacityUnits:  aws.Int64(5),
+				WriteCapacityUnits: aws.Int64(5),
+			},
+		}
+	} else {
+		return fmt.Errorf("unknown table name: %s", tableName)
+	}
+
+	_, err := d.db.CreateTable(context.TODO(), createTableInput)
+	if err != nil {
+		return fmt.Errorf("failed to create table %s: %v", tableName, err)
+	}
+
+	return nil
 }
 
 func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
