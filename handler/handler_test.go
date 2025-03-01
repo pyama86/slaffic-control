@@ -41,6 +41,7 @@ func createSlackSignature(timestamp int64, msgBody string) string {
 func TestHandler_handleSlackEvents(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
+	botID := randomString(10)
 
 	// モックの作成
 	mockClient := NewMockSlackAPI(ctrl)
@@ -50,7 +51,7 @@ func TestHandler_handleSlackEvents(t *testing.T) {
 	assert.NoError(t, err)
 
 	// モックのレスポンス設定
-	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: "bot_id"}, nil).AnyTimes()
+	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
 	mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).AnyTimes()
 
 	handler.client = mockClient
@@ -75,7 +76,7 @@ func TestHandler_handleSlackEvents(t *testing.T) {
 func TestHandler_handleMention(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
-
+	botID := randomString(10)
 	mockClient := NewMockSlackAPI(ctrl)
 
 	handler, err := NewHandler()
@@ -83,21 +84,21 @@ func TestHandler_handleMention(t *testing.T) {
 
 	mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).Times(1)
 	mockClient.EXPECT().GetUserInfo("user_id").Return(&slack.User{Name: "user_name"}, nil).Times(1)
-	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: "bot_id"}, nil).AnyTimes()
+	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
+	handler.client = mockClient
 
 	// メンション設定を保存しておく
 	mentions := model.MentionSetting{
 		Usernames: "user_id,group_id",
 	}
-	err = handler.ds.UpdateMentionSetting("", &mentions)
-	assert.NoError(t, err)
 
-	handler.client = mockClient
+	err = handler.ds.UpdateMentionSetting(botID, &mentions)
+	assert.NoError(t, err)
 
 	event := &slackevents.AppMentionEvent{
 		User:    "user_id",
 		Channel: "channel_id",
-		Text:    "<@bot_id> test message",
+		Text:    fmt.Sprintf("<@%s> test message", botID),
 	}
 
 	handler.handleMention(event)
@@ -110,12 +111,13 @@ func TestHandler_saveInquiry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
+	botID := randomString(10)
 	mockClient := NewMockSlackAPI(ctrl)
 
 	handler, err := NewHandler()
 	assert.NoError(t, err)
 
-	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: "bot_id_save"}, nil).AnyTimes()
+	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
 	handler.client = mockClient
 
 	message := "test inquiry"
@@ -127,7 +129,7 @@ func TestHandler_saveInquiry(t *testing.T) {
 	err = handler.saveInquiry(message, timestamp, channelID, userID, userName)
 	assert.NoError(t, err)
 
-	inquiries, err := handler.ds.GetLatestInquiries("bot_id_save")
+	inquiries, err := handler.ds.GetLatestInquiries(botID)
 	assert.NoError(t, err)
 	inquiry := inquiries[0]
 
@@ -140,6 +142,7 @@ func TestHandler_saveInquiry(t *testing.T) {
 func TestHandler_saveMentionSetting(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
+	botID := randomString(10)
 
 	// モックの作成
 	mockClient := NewMockSlackAPI(ctrl)
@@ -152,7 +155,7 @@ func TestHandler_saveMentionSetting(t *testing.T) {
 	mockClient.EXPECT().GetUsers().Return([]slack.User{{ID: "user1", Name: "user1"}}, nil).Times(1)
 	mockClient.EXPECT().GetUserGroups().Return([]slack.UserGroup{{ID: "Sxxxx", Name: "group"}}, nil).Times(1)
 	mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).Times(1)
-	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: "bot_id"}, nil).AnyTimes()
+	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
 	handler.client = mockClient
 
 	// メンション設定の保存

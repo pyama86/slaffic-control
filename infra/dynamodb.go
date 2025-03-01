@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -79,15 +80,41 @@ func (d *DynamoDB) EnsureTable() error {
 				AttributeName: aws.String("timestamp"),
 				AttributeType: types.ScalarAttributeTypeS,
 			},
+			{
+				AttributeName: aws.String("done"),
+				AttributeType: types.ScalarAttributeTypeN,
+			},
 		},
 		KeySchema: []types.KeySchemaElement{
 			{
 				AttributeName: aws.String("bot_id"),
-				KeyType:       types.KeyTypeHash,
+				KeyType:       types.KeyTypeHash, // Partition Key
 			},
 			{
 				AttributeName: aws.String("timestamp"),
-				KeyType:       types.KeyTypeRange,
+				KeyType:       types.KeyTypeRange, // Sort Key
+			},
+		},
+		GlobalSecondaryIndexes: []types.GlobalSecondaryIndex{
+			{
+				IndexName: aws.String("BotIdDoneIndex"),
+				KeySchema: []types.KeySchemaElement{
+					{
+						AttributeName: aws.String("bot_id"),
+						KeyType:       types.KeyTypeHash, // Partition Key
+					},
+					{
+						AttributeName: aws.String("done"),
+						KeyType:       types.KeyTypeRange, // Sort Key
+					},
+				},
+				Projection: &types.Projection{
+					ProjectionType: types.ProjectionTypeAll,
+				},
+				ProvisionedThroughput: &types.ProvisionedThroughput{
+					ReadCapacityUnits:  aws.Int64(5),
+					WriteCapacityUnits: aws.Int64(5),
+				},
 			},
 		},
 		ProvisionedThroughput: &types.ProvisionedThroughput{
@@ -135,7 +162,7 @@ func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
 			"user_name":  &types.AttributeValueMemberS{Value: inquiry.UserName},
 			"timestamp":  &types.AttributeValueMemberS{Value: inquiry.Timestamp},
 			"channel_id": &types.AttributeValueMemberS{Value: inquiry.ChannelID},
-			"done":       &types.AttributeValueMemberBOOL{Value: inquiry.Done},
+			"done":       &types.AttributeValueMemberN{Value: "0"},
 			"created_at": &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
 			"message":    &types.AttributeValueMemberS{Value: inquiry.Message},
 		},
@@ -150,11 +177,11 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 
 	input := &dynamodb.QueryInput{
 		TableName:              aws.String(tableNamePrefix + "_inquiries"),
-		KeyConditionExpression: aws.String("bot_id = :bot_id"),
-		FilterExpression:       aws.String("done = :done"),
+		KeyConditionExpression: aws.String("bot_id = :bot_id AND done = :done"),
+		IndexName:              aws.String("BotIdDoneIndex"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
 			":bot_id": &types.AttributeValueMemberS{Value: botID},
-			":done":   &types.AttributeValueMemberBOOL{Value: false},
+			":done":   &types.AttributeValueMemberN{Value: "0"},
 		},
 		ScanIndexForward: aws.Bool(false), // 降順（最新の created_at から取得）
 		Limit:            aws.Int32(10),
@@ -167,12 +194,15 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 
 	for _, item := range result.Items {
 		createdAtStr := getStringValue(item, "created_at")
-
 		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse created_at (%s): %v", createdAtStr, err)
 		}
 
+		done, err := getNumberValue(item, "done")
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse done: %v", err)
+		}
 		inquiry := model.Inquiry{
 			Timestamp: getStringValue(item, "timestamp"),
 			UserID:    getStringValue(item, "user_id"),
@@ -180,7 +210,7 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 			Message:   getStringValue(item, "message"),
 			ChannelID: getStringValue(item, "channel_id"),
 			CreatedAt: createdAt,
-			Done:      getBoolValue(item, "done"),
+			Done:      done == 1,
 		}
 		inquiries = append(inquiries, inquiry)
 	}
@@ -195,13 +225,13 @@ func getStringValue(item map[string]types.AttributeValue, key string) string {
 	return ""
 }
 
-func getBoolValue(item map[string]types.AttributeValue, key string) bool {
-	if v, ok := item[key].(*types.AttributeValueMemberBOOL); ok {
-		return v.Value
-	}
-	return false
-}
+func getNumberValue(item map[string]types.AttributeValue, key string) (int, error) {
+	if v, ok := item[key].(*types.AttributeValueMemberN); ok {
+		return strconv.Atoi(v.Value)
 
+	}
+	return 0, fmt.Errorf("failed to parse %s", key)
+}
 func (d *DynamoDB) GetMentionSetting(id string) (*model.MentionSetting, error) {
 	var setting model.MentionSetting
 	input := &dynamodb.GetItemInput{
@@ -241,6 +271,10 @@ func (d *DynamoDB) UpdateMentionSetting(id string, setting *model.MentionSetting
 }
 
 func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
+	doneValue := "0"
+	if done {
+		doneValue = "1"
+	}
 	input := &dynamodb.UpdateItemInput{
 		TableName: aws.String(tableNamePrefix + "_inquiries"),
 		Key: map[string]types.AttributeValue{
@@ -249,7 +283,7 @@ func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
 		},
 		UpdateExpression: aws.String("SET done = :done"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":done": &types.AttributeValueMemberBOOL{Value: done},
+			":done": &types.AttributeValueMemberN{Value: doneValue},
 		},
 	}
 

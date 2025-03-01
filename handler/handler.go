@@ -711,7 +711,7 @@ func (h *Handler) getBotUserID() string {
 			slog.Error("Failed to get bot user ID", slog.Any("err", err))
 			return ""
 		}
-
+		slog.Info("Bot user ID", slog.Any("id", authResp.UserID))
 		h.botID = authResp.UserID
 	}
 	return h.botID
