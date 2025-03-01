@@ -89,7 +89,8 @@ func TestHandler_handleMention(t *testing.T) {
 	mentions := model.MentionSetting{
 		Usernames: "user_id,group_id",
 	}
-	handler.ds.UpdateMentionSetting("", &mentions)
+	err = handler.ds.UpdateMentionSetting("", &mentions)
+	assert.NoError(t, err)
 
 	handler.client = mockClient
 
@@ -127,6 +128,7 @@ func TestHandler_saveInquiry(t *testing.T) {
 	assert.NoError(t, err)
 
 	inquiries, err := handler.ds.GetLatestInquiries("bot_id_save")
+	assert.NoError(t, err)
 	inquiry := inquiries[0]
 
 	assert.Equal(t, message, inquiry.Message)
@@ -192,7 +194,10 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 	server := slacktest.NewTestServer(func(c slacktest.Customize) {
 		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			_, err := w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			if err != nil {
+				t.Errorf("failed to write response: %v", err)
+			}
 		}))
 
 		c.Handle("/chat.postEphemeral", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +222,11 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 			postEphemeralRequests = append(postEphemeralRequests, data)
 
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
+			_, err := w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
+			if err != nil {
+				t.Errorf("failed to write response: %v", err)
+			}
+
 		}))
 	})
 
@@ -291,7 +300,11 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 	server := slacktest.NewTestServer(func(c slacktest.Customize) {
 		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			_, err := w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			if err != nil {
+				t.Errorf("failed to write response: %v", err)
+			}
+
 		}))
 
 		c.Handle("/chat.postEphemeral", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -316,7 +329,10 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 			postEphemeralRequests = append(postEphemeralRequests, data)
 
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
+			_, err := w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
+			if err != nil {
+				t.Errorf("failed to write response: %v", err)
+			}
 		}))
 	})
 

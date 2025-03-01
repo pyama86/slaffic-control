@@ -29,17 +29,16 @@ func NewDynamoDB() (*DynamoDB, error) {
 		cfg, err := config.LoadDefaultConfig(context.TODO(),
 			config.WithRegion("dummy"),
 			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("dummy", "dummy", "dummy")),
-			config.WithEndpointResolver(aws.EndpointResolverFunc(func(service, region string) (aws.Endpoint, error) {
-				return aws.Endpoint{
-					URL: "http://localhost:8000",
-				}, nil
-			})),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load configuration: %v", err)
 		}
 
-		db = dynamodb.NewFromConfig(cfg)
+		db = dynamodb.NewFromConfig(cfg,
+			func(o *dynamodb.Options) {
+				o.BaseEndpoint = aws.String("http://localhost:8000")
+			},
+		)
 	} else {
 		cfg, err := config.LoadDefaultConfig(context.TODO())
 		if err != nil {
@@ -48,7 +47,9 @@ func NewDynamoDB() (*DynamoDB, error) {
 
 		db = dynamodb.NewFromConfig(cfg)
 	}
-	d := &DynamoDB{db: db}
+	d := &DynamoDB{
+		db: db,
+	}
 	if os.Getenv("DYNAMO_LOCAL") != "" {
 		if err := d.EnsureTable(); err != nil {
 			return nil, err
