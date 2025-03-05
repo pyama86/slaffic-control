@@ -16,7 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pyama86/slaffic-control/model"
+	"github.com/pyama86/slaffic-control/domain/infra"
+	"github.com/pyama86/slaffic-control/domain/model"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/slacktest"
@@ -45,7 +46,7 @@ func TestHandler_handleSlackEvents(t *testing.T) {
 	botID := randomString(10)
 
 	// モックの作成
-	mockClient := NewMockSlackAPI(ctrl)
+	mockClient := infra.NewMockSlackAPI(ctrl)
 
 	// ハンドラーのセットアップ
 	handler, err := NewHandler()
@@ -79,7 +80,7 @@ func TestHandler_saveInquiry(t *testing.T) {
 	defer ctrl.Finish()
 
 	botID := randomString(10)
-	mockClient := NewMockSlackAPI(ctrl)
+	mockClient := infra.NewMockSlackAPI(ctrl)
 
 	handler, err := NewHandler()
 	assert.NoError(t, err)
@@ -112,7 +113,7 @@ func TestHandler_saveMentionSetting(t *testing.T) {
 	botID := randomString(10)
 
 	// モックの作成
-	mockClient := NewMockSlackAPI(ctrl)
+	mockClient := infra.NewMockSlackAPI(ctrl)
 
 	// ハンドラーのセットアップ
 	handler, err := NewHandler()

@@ -1,6 +1,6 @@
 package infra
 
-import "github.com/pyama86/slaffic-control/model"
+import "github.com/pyama86/slaffic-control/domain/model"
 
 type Datastore interface {
 	// 問い合わせを保存する

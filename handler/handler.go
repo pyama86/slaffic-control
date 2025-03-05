@@ -14,26 +14,16 @@ import (
 
 	"github.com/jellydator/ttlcache/v3"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/pyama86/slaffic-control/infra"
-	"github.com/pyama86/slaffic-control/model"
+	"github.com/pyama86/slaffic-control/domain/infra"
+	"github.com/pyama86/slaffic-control/domain/model"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
 )
 
 var defaultChannel = os.Getenv("DEFAULT_CHANNEL")
 
-type SlackAPI interface {
-	PostMessage(channelID string, options ...slack.MsgOption) (string, string, error)
-	OpenView(triggerID string, view slack.ModalViewRequest) (*slack.ViewResponse, error)
-	AuthTest() (*slack.AuthTestResponse, error)
-	GetUsers(options ...slack.GetUsersOption) ([]slack.User, error)
-	GetUserGroups(options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
-	GetUserInfo(userID string) (*slack.User, error)
-	PostEphemeral(channelID, userID string, options ...slack.MsgOption) (string, error)
-}
-
 type Handler struct {
-	client        SlackAPI
+	client        infra.SlackAPI
 	userCache     *ttlcache.Cache[string, []slack.User]
 	groupCache    *ttlcache.Cache[string, []slack.UserGroup]
 	userInfoCache *ttlcache.Cache[string, *slack.User]
@@ -59,9 +49,9 @@ func NewHandler() (*Handler, error) {
 	api := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
 	return &Handler{
 		client:        api,
-		userCache:     ttlcache.New[string, []slack.User](ttlcache.WithTTL[string, []slack.User](time.Hour)),
-		groupCache:    ttlcache.New[string, []slack.UserGroup](ttlcache.WithTTL[string, []slack.UserGroup](time.Hour)),
-		userInfoCache: ttlcache.New[string, *slack.User](ttlcache.WithTTL[string, *slack.User](24 * time.Hour)),
+		userCache:     ttlcache.New(ttlcache.WithTTL[string, []slack.User](time.Hour)),
+		groupCache:    ttlcache.New(ttlcache.WithTTL[string, []slack.UserGroup](time.Hour)),
+		userInfoCache: ttlcache.New(ttlcache.WithTTL[string, *slack.User](24 * time.Hour)),
 		ds:            ds,
 	}, nil
 }
@@ -726,18 +716,7 @@ func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sv, err := slack.NewSecretsVerifier(r.Header, os.Getenv("SLACK_SIGNING_SECRET"))
-	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		slog.Error("Failed to create secret verifier", slog.Any("err", err))
-		return
-	}
-	if _, err := sv.Write(body); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		slog.Error("Failed to write request body", slog.Any("err", err))
-		return
-	}
-	if err := sv.Ensure(); err != nil {
+	if err := verifySignature(body, r.Header); err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		slog.Error("Failed to verify signature", slog.Any("err", err))
 		return
@@ -751,6 +730,7 @@ func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch eventsAPIEvent.Type {
+	// URL 検証
 	case slackevents.URLVerification:
 		var res *slackevents.ChallengeResponse
 		if err := json.Unmarshal(body, &res); err != nil {
@@ -767,28 +747,26 @@ func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
 
 	case slackevents.CallbackEvent:
 		innerEvent := eventsAPIEvent.InnerEvent
-		slog.Info("Event received", slog.Any("event", innerEvent))
 		switch event := innerEvent.Data.(type) {
 		case *slackevents.AppMentionEvent:
 			h.handleMention(event)
 		case *slackevents.ReactionAddedEvent:
 			if event.Reaction == "white_check_mark" {
-				if err := h.ds.UpdateInquiryDone(h.getBotUserID(), event.Item.Timestamp, true); err != nil {
-					slog.Error("Failed to update inquiry", slog.Any("err", err))
-				} else {
-					slog.Info("Inquiry done", slog.String("timestamp", event.Item.Timestamp))
-				}
+				h.handleReaction(true, event.Item.Timestamp)
 			}
 		case *slackevents.ReactionRemovedEvent:
 			if event.Reaction == "white_check_mark" {
-				if err := h.ds.UpdateInquiryDone(h.getBotUserID(), event.Item.Timestamp, false); err != nil {
-					slog.Error("Failed to restore inquiry", slog.Any("err", err))
-				} else {
-					slog.Info("Inquiry restored", slog.String("timestamp", event.Item.Timestamp))
-				}
+				h.handleReaction(false, event.Item.Timestamp)
 			}
 		}
 	}
+}
+
+func (h *Handler) handleReaction(done bool, timestamp string) {
+	if err := h.ds.UpdateInquiryDone(h.getBotUserID(), timestamp, done); err != nil {
+		slog.Error("Failed to update inquiry", slog.Any("err", err), slog.String("timestamp", timestamp), slog.Bool("done", done))
+	}
+	slog.Info("Inquiry update", slog.String("timestamp", timestamp), slog.Bool("done", done))
 }
 
 // メンションを受け取ったときの処理
@@ -871,23 +849,31 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 		},
 	}
 }
-
-func (h *Handler) HandleInteractions(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(r.Body)
-	r.Body.Close()
-
-	sv, err := slack.NewSecretsVerifier(r.Header, os.Getenv("SLACK_SIGNING_SECRET"))
+func verifySignature(body []byte, header http.Header) error {
+	sv, err := slack.NewSecretsVerifier(header, os.Getenv("SLACK_SIGNING_SECRET"))
 	if err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		slog.Error("Failed to create secret verifier", slog.Any("err", err))
-		return
+		return fmt.Errorf("Failed to create secret verifier %w", err)
+
 	}
 	if _, err := sv.Write(body); err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		slog.Error("Failed to write request body", slog.Any("err", err))
-		return
+		return fmt.Errorf("Failed to write request body %w", err)
 	}
 	if err := sv.Ensure(); err != nil {
+		return fmt.Errorf("Failed to verify signature %w", err)
+	}
+	return nil
+}
+
+func (h *Handler) HandleInteractions(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		slog.Error("Failed to read request body", slog.Any("err", err))
+		return
+	}
+	defer r.Body.Close()
+
+	if err := verifySignature(body, r.Header); err != nil {
 		w.WriteHeader(http.StatusUnauthorized)
 		slog.Error("Failed to verify signature", slog.Any("err", err))
 		return
@@ -915,20 +901,28 @@ func (h *Handler) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 		case "inquiry_action":
 			if err := h.openInquiryModal(callback.TriggerID, callback.Channel.ID); err != nil {
 				slog.Error("openInquiryModal failed", slog.Any("err", err))
+
+				w.WriteHeader(http.StatusInternalServerError)
+				return
 			}
 		case "history_action":
 			if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
 				slog.Error("showInquiries failed", slog.Any("err", err))
+				w.WriteHeader(http.StatusInternalServerError)
+				return
 			}
 		case "mention_action":
 			if err := h.openMentionSettingModal(callback.TriggerID, callback.Channel.ID); err != nil {
 				slog.Error("openMentionSettingModal failed", slog.Any("err", err))
+				w.WriteHeader(http.StatusInternalServerError)
+				return
 			}
 		}
 	case slack.InteractionTypeViewSubmission:
 		user, err := h.getUserInfo(callback.User.ID)
 		if err != nil {
 			slog.Error("GetUserInfo failed", slog.Any("err", err))
+			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
 
@@ -940,21 +934,26 @@ func (h *Handler) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 
 		switch callback.View.CallbackID {
 		case "inquiry_modal":
+			// 問い合わせの受付
 			inputValue := callback.View.State.Values["inquiry_block"]["inquiry_text"].Value
 			priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
 			channelID := callback.View.PrivateMetadata
+
 			t, err := h.postInquiryRichMessage(channelID, priority, inputValue)
 			if err != nil {
 				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
 			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName); err != nil {
 				slog.Error("saveInquiry failed", slog.Any("err", err))
+				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
 
 		case "mention_setting_modal":
+			// メンションの保存
 			mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
 			channelID := callback.View.PrivateMetadata
 			err := h.saveMentionSetting(mentionsRaw, channelID, userName)
@@ -969,6 +968,8 @@ func (h *Handler) HandleInteractions(w http.ResponseWriter, r *http.Request) {
 					),
 				); err != nil {
 					slog.Error("Failed to post ephemeral message", slog.Any("err", err))
+					w.WriteHeader(http.StatusInternalServerError)
+					return
 				}
 			}
 		}

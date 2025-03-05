@@ -6,7 +6,7 @@ import (
 
 	"github.com/jinzhu/gorm"
 	_ "github.com/mattn/go-sqlite3"
-	"github.com/pyama86/slaffic-control/model"
+	"github.com/pyama86/slaffic-control/domain/model"
 )
 
 type DataBase struct {

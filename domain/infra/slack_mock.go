@@ -7,7 +7,7 @@
 //
 
 // Package main is a generated GoMock package.
-package handler
+package infra
 
 import (
 	reflect "reflect"

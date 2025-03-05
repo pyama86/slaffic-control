@@ -12,7 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
-	"github.com/pyama86/slaffic-control/model"
+	"github.com/pyama86/slaffic-control/domain/model"
 )
 
 type DynamoDB struct {
