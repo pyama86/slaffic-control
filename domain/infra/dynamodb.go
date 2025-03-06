@@ -20,10 +20,20 @@ type DynamoDB struct {
 }
 
 var tableNamePrefix = "slaffic_control"
+var inquiryTableName = ""
+var mentionSettingTableName = ""
 
 func NewDynamoDB() (*DynamoDB, error) {
 	if os.Getenv("DYNAMO_TABLE_NAME_PREFIX") != "" {
 		tableNamePrefix = os.Getenv("DYNAMO_TABLE_NAME_PREFIX")
+		inquiryTableName = tableNamePrefix + "_inquiry"
+		mentionSettingTableName = tableNamePrefix + "_mention_setting"
+	}
+	if os.Getenv("DNAMO_INQUIRY_TABLE_NAME") != "" {
+		inquiryTableName = os.Getenv("DNAMO_INQUIRY_TABLE_NAME")
+	}
+	if os.Getenv("DNAMO_MENTION_SETTING_TABLE_NAME") != "" {
+		mentionSettingTableName = os.Getenv("DNAMO_MENTION_SETTING_TABLE_NAME")
 	}
 	var db *dynamodb.Client
 	if os.Getenv("DYNAMO_LOCAL") != "" {
@@ -66,8 +76,8 @@ const (
 
 func (d *DynamoDB) EnsureTable() error {
 	tableNames := []string{
-		tableNamePrefix + "_inquiries",
-		tableNamePrefix + "_mention_settings",
+		inquiryTableName,
+		mentionSettingTableName,
 	}
 
 	for _, tableName := range tableNames {
@@ -116,7 +126,7 @@ func (d *DynamoDB) ensureSingleTable(tableName string) error {
 func (d *DynamoDB) createTable(tableName string) error {
 	var createTableInput *dynamodb.CreateTableInput
 
-	if tableName == tableNamePrefix+"_inquiries" {
+	if tableName == inquiryTableName {
 		createTableInput = &dynamodb.CreateTableInput{
 			TableName: aws.String(tableName),
 			AttributeDefinitions: []types.AttributeDefinition{
@@ -147,7 +157,7 @@ func (d *DynamoDB) createTable(tableName string) error {
 				WriteCapacityUnits: aws.Int64(5),
 			},
 		}
-	} else if tableName == tableNamePrefix+"_mention_settings" {
+	} else if tableName == mentionSettingTableName {
 		createTableInput = &dynamodb.CreateTableInput{
 			TableName: aws.String(tableName),
 			AttributeDefinitions: []types.AttributeDefinition{
@@ -175,7 +185,7 @@ func (d *DynamoDB) createTable(tableName string) error {
 
 func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String(tableNamePrefix + "_inquiries"),
+		TableName: aws.String(inquiryTableName),
 		Item: map[string]types.AttributeValue{
 			"bot_id":     &types.AttributeValueMemberS{Value: inquiry.BotID},
 			"user_id":    &types.AttributeValueMemberS{Value: inquiry.UserID},
@@ -196,7 +206,7 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 	var inquiries []model.Inquiry
 
 	input := &dynamodb.QueryInput{
-		TableName:              aws.String(tableNamePrefix + "_inquiries"),
+		TableName:              aws.String(inquiryTableName),
 		KeyConditionExpression: aws.String("bot_id = :bot_id AND done = :done"),
 		IndexName:              aws.String("BotIdDoneIndex"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
@@ -255,7 +265,7 @@ func getNumberValue(item map[string]types.AttributeValue, key string) (int, erro
 func (d *DynamoDB) GetMentionSetting(id string) (*model.MentionSetting, error) {
 	var setting model.MentionSetting
 	input := &dynamodb.GetItemInput{
-		TableName: aws.String(tableNamePrefix + "_mention_settings"),
+		TableName: aws.String(mentionSettingTableName),
 		Key: map[string]types.AttributeValue{
 			"bot_id": &types.AttributeValueMemberS{Value: id},
 		},
@@ -278,7 +288,7 @@ func (d *DynamoDB) GetMentionSetting(id string) (*model.MentionSetting, error) {
 
 func (d *DynamoDB) UpdateMentionSetting(id string, setting *model.MentionSetting) error {
 	input := &dynamodb.PutItemInput{
-		TableName: aws.String(tableNamePrefix + "_mention_settings"),
+		TableName: aws.String(mentionSettingTableName),
 		Item: map[string]types.AttributeValue{
 			"bot_id":     &types.AttributeValueMemberS{Value: id},
 			"user_names": &types.AttributeValueMemberS{Value: setting.Usernames},
@@ -296,7 +306,7 @@ func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
 		doneValue = "1"
 	}
 	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String(tableNamePrefix + "_inquiries"),
+		TableName: aws.String(inquiryTableName),
 		Key: map[string]types.AttributeValue{
 			"bot_id":    &types.AttributeValueMemberS{Value: botID},
 			"timestamp": &types.AttributeValueMemberS{Value: timestamp},
