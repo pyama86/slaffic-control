@@ -27,6 +27,7 @@ jobs:
       env:
         DB_DRIVER: dynamodb
         DYNAMO_LOCAL: 1
+        DYNAMO_TABLE_NAME_PREFIX: test
     services:
       dynamodb:
         image: amazon/dynamodb-local:latest
