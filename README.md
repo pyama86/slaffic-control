@@ -24,6 +24,15 @@ export DB_PATH=<path_to_your_database>  # オプション、デフォルトは .
 export DEFAULT_CHANNEL=<default_channel> # オプション、例: "#general"
 export LISTEN_SOCKET=<listen_socket> # オプション、デフォルトは ":3000"
 ```
+#### DynamoDB の設定
+```
+export DB_DRIVER=dynamodb
+# テーブル名のプレフィクスかテーブル名を指定してください
+export DYNAMO_TABLE_NAME_PREFIX=<your prefix>
+or
+export DYNAMO_INQUIRY_TABLE_NAME=<your inquiry table name>
+export DYNAMO_MENTION_SETTING_TABLE_NAME=<your mention setting table name>
+```
 
 ## 必要な OAuth スコープ
 
