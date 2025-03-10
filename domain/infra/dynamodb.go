@@ -29,11 +29,11 @@ func NewDynamoDB() (*DynamoDB, error) {
 		inquiryTableName = tableNamePrefix + "_inquiry"
 		mentionSettingTableName = tableNamePrefix + "_mention_setting"
 	}
-	if os.Getenv("DNAMO_INQUIRY_TABLE_NAME") != "" {
-		inquiryTableName = os.Getenv("DNAMO_INQUIRY_TABLE_NAME")
+	if os.Getenv("DYNAMO_INQUIRY_TABLE_NAME") != "" {
+		inquiryTableName = os.Getenv("DYNAMO_INQUIRY_TABLE_NAME")
 	}
-	if os.Getenv("DNAMO_MENTION_SETTING_TABLE_NAME") != "" {
-		mentionSettingTableName = os.Getenv("DNAMO_MENTION_SETTING_TABLE_NAME")
+	if os.Getenv("DYNAMO_MENTION_SETTING_TABLE_NAME") != "" {
+		mentionSettingTableName = os.Getenv("DYNAMO_MENTION_SETTING_TABLE_NAME")
 	}
 	var db *dynamodb.Client
 	if os.Getenv("DYNAMO_LOCAL") != "" {
