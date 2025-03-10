@@ -1,14 +1,9 @@
 package handler
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -21,21 +16,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	gomock "go.uber.org/mock/gomock"
 )
-
-func createTimeStamp() int64 {
-	return time.Now().Unix()
-}
-
-func createSlackSignature(timestamp int64, msgBody string) string {
-
-	body := fmt.Sprintf("v0:%s:%s", strconv.FormatInt(timestamp, 10), msgBody)
-	hash := hmac.New(sha256.New, []byte(os.Getenv("SLACK_SIGNING_SECRET")))
-	hash.Write([]byte(body))
-
-	sha := "v0=" + hex.EncodeToString(hash.Sum(nil))
-
-	return sha
-}
 
 /*
 	func TestHandler_handleSlackEvents(t *testing.T) {
