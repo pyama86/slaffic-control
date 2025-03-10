@@ -12,27 +12,18 @@
 ## 必要条件
 
 - Go 1.16 以上
-- Slack ボットトークンとサイニングシークレット（`SLACK_BOT_TOKEN` と `SLACK_SIGNING_SECRET`）
 - SQLite（データベース用）
+- Slack Socket Mode
 
 ## 環境変数
 ```
 export SLACK_BOT_TOKEN=<your_slack_bot_token>
-export SLACK_SIGNING_SECRET=<your_slack_signing_secret>
+export SLACK_APP_TOKEN=<your_slack_signing_secret>
 export SLACK_WORKSPACE_URL=<your_slack_workspace_url>
 export DB_PATH=<path_to_your_database>  # オプション、デフォルトは ./db/slaffic_control.db
 export DEFAULT_CHANNEL=<default_channel> # オプション、例: "#general"
 export LISTEN_SOCKET=<listen_socket> # オプション、デフォルトは ":3000"
 ```
-
-## API エンドポイント
-リクエストはサイニングシークレットで検証されます。
-
-- /slack/events
-Slack イベント（メンションなど）を受け取り、Slack チャンネルとのやり取りを行います。
-
-- /slack/interactions
-Slack のブロックキットからのインタラクション（フォーム送信など）を処理します。
 
 ## 必要な OAuth スコープ
 

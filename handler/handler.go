@@ -1,12 +1,8 @@
 package handler
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -18,6 +14,7 @@ import (
 	"github.com/pyama86/slaffic-control/domain/model"
 	"github.com/slack-go/slack"
 	"github.com/slack-go/slack/slackevents"
+	"github.com/slack-go/slack/socketmode"
 )
 
 var defaultChannel = os.Getenv("DEFAULT_CHANNEL")
@@ -55,6 +52,144 @@ func NewHandler() (*Handler, error) {
 		ds:            ds,
 	}, nil
 }
+
+func (h *Handler) Handle() error {
+	webApi := slack.New(
+		os.Getenv("SLACK_BOT_TOKEN"),
+		slack.OptionAppLevelToken(os.Getenv("SLACK_APP_TOKEN")),
+	)
+	socketMode := socketmode.New(
+		webApi,
+	)
+	authTest, authTestErr := webApi.AuthTest()
+	if authTestErr != nil {
+		fmt.Fprintf(os.Stderr, "SLACK_BOT_TOKEN is invalid: %v\n", authTestErr)
+		os.Exit(1)
+	}
+	h.botID = authTest.UserID
+
+	go func() {
+		for envelope := range socketMode.Events {
+			switch envelope.Type {
+			case socketmode.EventTypeEventsAPI:
+				socketMode.Ack(*envelope.Request)
+				eventPayload, ok := envelope.Data.(slackevents.EventsAPIEvent)
+				if !ok {
+					slog.Error("Failed to cast to EventsAPIEvent")
+					continue
+				}
+				switch eventPayload.Type {
+				case slackevents.CallbackEvent:
+					innerEvent := eventPayload.InnerEvent
+					switch event := innerEvent.Data.(type) {
+					case *slackevents.AppMentionEvent:
+						h.handleMention(event)
+					case *slackevents.ReactionAddedEvent:
+						if event.Reaction == "white_check_mark" {
+							h.handleReaction(true, event.Item.Timestamp)
+						}
+					case *slackevents.ReactionRemovedEvent:
+						if event.Reaction == "white_check_mark" {
+							h.handleReaction(false, event.Item.Timestamp)
+						}
+					}
+				default:
+					slog.Warn("Unsupported EventsAPIEvent type", slog.Any("type", eventPayload.Type))
+				}
+			case socketmode.EventTypeInteractive:
+				socketMode.Ack(*envelope.Request)
+				callback, ok := envelope.Data.(slack.InteractionCallback)
+				if !ok {
+					slog.Error("Failed to cast to InteractionCallback")
+					continue
+				}
+				switch callback.Type {
+				case slack.InteractionTypeBlockActions:
+					if len(callback.ActionCallback.BlockActions) < 1 {
+						return
+					}
+					action := callback.ActionCallback.BlockActions[0]
+
+					switch action.ActionID {
+					case "inquiry_action":
+						if err := h.openInquiryModal(callback.TriggerID, callback.Channel.ID); err != nil {
+							slog.Error("openInquiryModal failed", slog.Any("err", err))
+
+							return
+						}
+					case "history_action":
+						if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
+							slog.Error("showInquiries failed", slog.Any("err", err))
+							return
+						}
+					case "mention_action":
+						if err := h.openMentionSettingModal(callback.TriggerID, callback.Channel.ID); err != nil {
+							slog.Error("openMentionSettingModal failed", slog.Any("err", err))
+							return
+						}
+					}
+				case slack.InteractionTypeViewSubmission:
+					user, err := h.getUserInfo(callback.User.ID)
+					if err != nil {
+						slog.Error("GetUserInfo failed", slog.Any("err", err))
+						return
+					}
+
+					// 投稿者の名前（表示名があれば優先）
+					userName := user.Profile.DisplayName
+					if userName == "" {
+						userName = user.RealName
+					}
+
+					switch callback.View.CallbackID {
+					case "inquiry_modal":
+						// 問い合わせの受付
+						inputValue := callback.View.State.Values["inquiry_block"]["inquiry_text"].Value
+						priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
+						channelID := callback.View.PrivateMetadata
+
+						t, err := h.postInquiryRichMessage(channelID, priority, inputValue)
+						if err != nil {
+							slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
+							return
+						}
+
+						if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName); err != nil {
+							slog.Error("saveInquiry failed", slog.Any("err", err))
+							return
+						}
+
+					case "mention_setting_modal":
+						// メンションの保存
+						mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
+						channelID := callback.View.PrivateMetadata
+						err := h.saveMentionSetting(mentionsRaw, channelID, userName)
+						if err != nil {
+							slog.Error("saveMentionSetting failed", slog.Any("err", err))
+							if _, err := h.client.PostEphemeral(
+								channelID,
+								callback.User.ID,
+								slack.MsgOptionText(
+									fmt.Sprintf(":warning: メンション設定の保存に失敗しました。\n```%s```", err.Error()),
+									false,
+								),
+							); err != nil {
+								slog.Error("Failed to post ephemeral message", slog.Any("err", err))
+								return
+							}
+						}
+					}
+				}
+
+			default:
+				socketMode.Debugf("Skipped: %v", envelope.Type)
+			}
+		}
+	}()
+
+	return socketMode.Run()
+}
+
 func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	titleText := slack.NewTextBlockObject("plain_text", "📩 問い合わせフォーム", false, false)
 	submitText := slack.NewTextBlockObject("plain_text", "✅ 送信", false, false)
@@ -707,61 +842,6 @@ func (h *Handler) getBotUserID() string {
 	return h.botID
 }
 
-func (h *Handler) HandleSlackEvents(w http.ResponseWriter, r *http.Request) {
-	defer r.Body.Close()
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		slog.Error("Failed to read request body", slog.Any("err", err))
-		return
-	}
-
-	if err := verifySignature(body, r.Header); err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		slog.Error("Failed to verify signature", slog.Any("err", err))
-		return
-	}
-
-	eventsAPIEvent, err := slackevents.ParseEvent(json.RawMessage(body), slackevents.OptionNoVerifyToken())
-	if err != nil {
-		slog.Error("Failed to parse event", slog.Any("err", err))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	switch eventsAPIEvent.Type {
-	// URL 検証
-	case slackevents.URLVerification:
-		var res *slackevents.ChallengeResponse
-		if err := json.Unmarshal(body, &res); err != nil {
-			slog.Error("Failed to unmarshal challenge response", slog.Any("err", err))
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain")
-		if _, err := w.Write([]byte(res.Challenge)); err != nil {
-			slog.Error("Failed to write challenge response", slog.Any("err", err))
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-	case slackevents.CallbackEvent:
-		innerEvent := eventsAPIEvent.InnerEvent
-		switch event := innerEvent.Data.(type) {
-		case *slackevents.AppMentionEvent:
-			h.handleMention(event)
-		case *slackevents.ReactionAddedEvent:
-			if event.Reaction == "white_check_mark" {
-				h.handleReaction(true, event.Item.Timestamp)
-			}
-		case *slackevents.ReactionRemovedEvent:
-			if event.Reaction == "white_check_mark" {
-				h.handleReaction(false, event.Item.Timestamp)
-			}
-		}
-	}
-}
-
 func (h *Handler) handleReaction(done bool, timestamp string) {
 	if err := h.ds.UpdateInquiryDone(h.getBotUserID(), timestamp, done); err != nil {
 		slog.Error("Failed to update inquiry", slog.Any("err", err), slog.String("timestamp", timestamp), slog.Bool("done", done))
@@ -848,132 +928,4 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 			},
 		},
 	}
-}
-func verifySignature(body []byte, header http.Header) error {
-	sv, err := slack.NewSecretsVerifier(header, os.Getenv("SLACK_SIGNING_SECRET"))
-	if err != nil {
-		return fmt.Errorf("Failed to create secret verifier %w", err)
-
-	}
-	if _, err := sv.Write(body); err != nil {
-		return fmt.Errorf("Failed to write request body %w", err)
-	}
-	if err := sv.Ensure(); err != nil {
-		return fmt.Errorf("Failed to verify signature %w", err)
-	}
-	return nil
-}
-
-func (h *Handler) HandleInteractions(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		w.WriteHeader(http.StatusInternalServerError)
-		slog.Error("Failed to read request body", slog.Any("err", err))
-		return
-	}
-	defer r.Body.Close()
-
-	if err := verifySignature(body, r.Header); err != nil {
-		w.WriteHeader(http.StatusUnauthorized)
-		slog.Error("Failed to verify signature", slog.Any("err", err))
-		return
-	}
-
-	formData, _ := url.QueryUnescape(string(body))
-	formData = strings.TrimPrefix(formData, "payload=")
-
-	var callback slack.InteractionCallback
-	if err := json.Unmarshal([]byte(formData), &callback); err != nil {
-		slog.Error("Failed to unmarshal interaction", slog.Any("err", err))
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	switch callback.Type {
-	case slack.InteractionTypeBlockActions:
-		if len(callback.ActionCallback.BlockActions) < 1 {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		action := callback.ActionCallback.BlockActions[0]
-
-		switch action.ActionID {
-		case "inquiry_action":
-			if err := h.openInquiryModal(callback.TriggerID, callback.Channel.ID); err != nil {
-				slog.Error("openInquiryModal failed", slog.Any("err", err))
-
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-		case "history_action":
-			if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
-				slog.Error("showInquiries failed", slog.Any("err", err))
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-		case "mention_action":
-			if err := h.openMentionSettingModal(callback.TriggerID, callback.Channel.ID); err != nil {
-				slog.Error("openMentionSettingModal failed", slog.Any("err", err))
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-		}
-	case slack.InteractionTypeViewSubmission:
-		user, err := h.getUserInfo(callback.User.ID)
-		if err != nil {
-			slog.Error("GetUserInfo failed", slog.Any("err", err))
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		// 投稿者の名前（表示名があれば優先）
-		userName := user.Profile.DisplayName
-		if userName == "" {
-			userName = user.RealName
-		}
-
-		switch callback.View.CallbackID {
-		case "inquiry_modal":
-			// 問い合わせの受付
-			inputValue := callback.View.State.Values["inquiry_block"]["inquiry_text"].Value
-			priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
-			channelID := callback.View.PrivateMetadata
-
-			t, err := h.postInquiryRichMessage(channelID, priority, inputValue)
-			if err != nil {
-				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName); err != nil {
-				slog.Error("saveInquiry failed", slog.Any("err", err))
-				w.WriteHeader(http.StatusInternalServerError)
-				return
-			}
-
-		case "mention_setting_modal":
-			// メンションの保存
-			mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
-			channelID := callback.View.PrivateMetadata
-			err := h.saveMentionSetting(mentionsRaw, channelID, userName)
-			if err != nil {
-				slog.Error("saveMentionSetting failed", slog.Any("err", err))
-				if _, err := h.client.PostEphemeral(
-					channelID,
-					callback.User.ID,
-					slack.MsgOptionText(
-						fmt.Sprintf(":warning: メンション設定の保存に失敗しました。\n```%s```", err.Error()),
-						false,
-					),
-				); err != nil {
-					slog.Error("Failed to post ephemeral message", slog.Any("err", err))
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
-			}
-		}
-	}
-
-	w.WriteHeader(http.StatusOK)
 }

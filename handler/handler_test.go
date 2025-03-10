@@ -1,15 +1,12 @@
 package handler
 
 import (
-	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/http/httptest"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -40,41 +37,42 @@ func createSlackSignature(timestamp int64, msgBody string) string {
 	return sha
 }
 
-func TestHandler_handleSlackEvents(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-	botID := randomString(10)
+/*
+	func TestHandler_handleSlackEvents(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		botID := randomString(10)
 
-	// モックの作成
-	mockClient := infra.NewMockSlackAPI(ctrl)
+		// モックの作成
+		mockClient := infra.NewMockSlackAPI(ctrl)
 
-	// ハンドラーのセットアップ
-	handler, err := NewHandler()
-	assert.NoError(t, err)
+		// ハンドラーのセットアップ
+		handler, err := NewHandler()
+		assert.NoError(t, err)
 
-	// モックのレスポンス設定
-	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
-	mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).AnyTimes()
+		// モックのレスポンス設定
+		mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
+		mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).AnyTimes()
 
-	handler.client = mockClient
+		handler.client = mockClient
 
-	body := `{"type":"url_verification","challenge":"test_challenge"}`
-	ts := createTimeStamp()
-	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBufferString(body))
-	req.Header.Set("X-Slack-Signature", createSlackSignature(ts, body))
-	req.Header.Set("X-Slack-Request-Timestamp", strconv.FormatInt(ts, 10))
+		body := `{"type":"url_verification","challenge":"test_challenge"}`
+		ts := createTimeStamp()
+		req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBufferString(body))
+		req.Header.Set("X-Slack-Signature", createSlackSignature(ts, body))
+		req.Header.Set("X-Slack-Request-Timestamp", strconv.FormatInt(ts, 10))
 
-	rr := httptest.NewRecorder()
+		rr := httptest.NewRecorder()
 
-	handler.HandleSlackEvents(rr, req)
+		handler.HandleSlackEvents(rr, req)
 
-	assert.Equal(t, http.StatusOK, rr.Code)
-	assert.Equal(t, "test_challenge", rr.Body.String())
-	if !ctrl.Satisfied() {
-		t.Errorf("Not all expectations were met")
+		assert.Equal(t, http.StatusOK, rr.Code)
+		assert.Equal(t, "test_challenge", rr.Body.String())
+		if !ctrl.Satisfied() {
+			t.Errorf("Not all expectations were met")
+		}
 	}
-}
-
+*/
 func TestHandler_saveInquiry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -133,30 +131,6 @@ func TestHandler_saveMentionSetting(t *testing.T) {
 
 	err = handler.saveMentionSetting(mentionsRaw, channelID, userName)
 	assert.NoError(t, err)
-}
-
-// 認証のテストだけやる
-func TestHandler_handleInteractions(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	handler, err := NewHandler()
-	assert.NoError(t, err)
-
-	body := `{"type":"url_verification","challenge":"test_challenge"}`
-	ts := createTimeStamp()
-	req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBufferString(body))
-	req.Header.Set("X-Slack-Signature", createSlackSignature(ts, body))
-	req.Header.Set("X-Slack-Request-Timestamp", strconv.FormatInt(ts, 10))
-
-	rr := httptest.NewRecorder()
-
-	handler.HandleInteractions(rr, req)
-
-	assert.Equal(t, http.StatusOK, rr.Code)
-	if !ctrl.Satisfied() {
-		t.Errorf("Not all expectations were met")
-	}
 }
 
 func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
@@ -501,6 +475,7 @@ func TestHandler_handleMention(t *testing.T) {
 	}
 }
 
+/*
 func TestHandler_HandleInteractions_BlockActions(t *testing.T) {
 	var postEphemeralPayloads []map[string]interface{}
 	var viewsOpenPayloads []map[string]interface{}
@@ -828,3 +803,4 @@ func TestHandler_HandleInteractions_ViewSubmission(t *testing.T) {
 		})
 	}
 }
+*/

@@ -2,7 +2,6 @@ package main
 
 import (
 	"log/slog"
-	"net/http"
 	"os"
 
 	"github.com/pyama86/slaffic-control/handler"
@@ -11,7 +10,7 @@ import (
 func init() {
 	requiredEnv := []string{
 		"SLACK_BOT_TOKEN",
-		"SLACK_SIGNING_SECRET",
+		"SLACK_APP_TOKEN",
 	}
 	for _, env := range requiredEnv {
 		if os.Getenv(env) == "" {
@@ -28,9 +27,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	http.HandleFunc("/slack/events", h.HandleSlackEvents)
-	http.HandleFunc("/slack/interactions", h.HandleInteractions)
-
 	// 自動ローテーション
 	h.StartRotationMonitor()
 
@@ -39,7 +35,7 @@ func main() {
 		bind = os.Getenv("LISTEN_SOCKET")
 	}
 	slog.Info("Server listening", slog.String("bind", bind))
-	if err := http.ListenAndServe(bind, nil); err != nil {
+	if err := h.Handle(); err != nil {
 		slog.Error("Server failed", slog.Any("err", err))
 		os.Exit(1)
 	}
