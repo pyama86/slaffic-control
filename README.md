@@ -18,7 +18,7 @@
 ## 環境変数
 ```
 export SLACK_BOT_TOKEN=<your_slack_bot_token>
-export SLACK_APP_TOKEN=<your_slack_signing_secret>
+export SLACK_APP_TOKEN=<your_slack_app_token>
 export SLACK_WORKSPACE_URL=<your_slack_workspace_url>
 export DB_PATH=<path_to_your_database>  # オプション、デフォルトは ./db/slaffic_control.db
 export DEFAULT_CHANNEL=<default_channel> # オプション、例: "#general"

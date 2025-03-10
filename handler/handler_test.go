@@ -17,42 +17,6 @@ import (
 	gomock "go.uber.org/mock/gomock"
 )
 
-/*
-	func TestHandler_handleSlackEvents(t *testing.T) {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		botID := randomString(10)
-
-		// モックの作成
-		mockClient := infra.NewMockSlackAPI(ctrl)
-
-		// ハンドラーのセットアップ
-		handler, err := NewHandler()
-		assert.NoError(t, err)
-
-		// モックのレスポンス設定
-		mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
-		mockClient.EXPECT().PostMessage(gomock.Any(), gomock.Any()).Return("ok", "timestamp", nil).AnyTimes()
-
-		handler.client = mockClient
-
-		body := `{"type":"url_verification","challenge":"test_challenge"}`
-		ts := createTimeStamp()
-		req := httptest.NewRequest(http.MethodPost, "/slack/events", bytes.NewBufferString(body))
-		req.Header.Set("X-Slack-Signature", createSlackSignature(ts, body))
-		req.Header.Set("X-Slack-Request-Timestamp", strconv.FormatInt(ts, 10))
-
-		rr := httptest.NewRecorder()
-
-		handler.HandleSlackEvents(rr, req)
-
-		assert.Equal(t, http.StatusOK, rr.Code)
-		assert.Equal(t, "test_challenge", rr.Body.String())
-		if !ctrl.Satisfied() {
-			t.Errorf("Not all expectations were met")
-		}
-	}
-*/
 func TestHandler_saveInquiry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -455,7 +419,6 @@ func TestHandler_handleMention(t *testing.T) {
 	}
 }
 
-/*
 func TestHandler_HandleInteractions_BlockActions(t *testing.T) {
 	var postEphemeralPayloads []map[string]interface{}
 	var viewsOpenPayloads []map[string]interface{}
@@ -560,21 +523,7 @@ func TestHandler_HandleInteractions_BlockActions(t *testing.T) {
 				TriggerID: "TRIGGER_ABC",
 			}
 
-			// payloadをJSONエンコード & formData化
-			jsonBytes, _ := json.Marshal(callback)
-			body := "payload=" + url.QueryEscape(string(jsonBytes))
-			ts := createTimeStamp()
-			// テスト用HTTPリクエスト
-			req, _ := http.NewRequest(http.MethodPost, "/slack/interactions", bytes.NewBufferString(body))
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			req.Header.Set("X-Slack-Request-Timestamp", strconv.FormatInt(ts, 10))
-			req.Header.Set("X-Slack-Signature", createSlackSignature(ts, body))
-
-			rr := httptest.NewRecorder()
-			h.HandleInteractions(rr, req)
-
-			// 検証
-			assert.Equal(t, 200, rr.Code, "ハンドラは200を返すはず")
+			h.handleInteractions(&callback)
 
 			// ephemeral (履歴表示など)
 			if tt.wantEphemeral {
@@ -751,20 +700,7 @@ func TestHandler_HandleInteractions_ViewSubmission(t *testing.T) {
 				},
 			}
 
-			// JSON→form
-			jsonBytes, _ := json.Marshal(callback)
-			body := "payload=" + url.QueryEscape(string(jsonBytes))
-			ts := createTimeStamp()
-
-			req, _ := http.NewRequest(http.MethodPost, "/slack/interactions", bytes.NewBufferString(body))
-			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			req.Header.Set("X-Slack-Request-Timestamp", strconv.FormatInt(ts, 10))
-			req.Header.Set("X-Slack-Signature", createSlackSignature(ts, body))
-
-			rr := httptest.NewRecorder()
-			h.HandleInteractions(rr, req)
-			assert.Equal(t, 200, rr.Code)
-
+			h.handleInteractions(&callback)
 			// --- postMessage が期待回数呼ばれたか
 			assert.Len(t, postMessagePayloads, tt.wantMsgCount)
 
@@ -783,4 +719,3 @@ func TestHandler_HandleInteractions_ViewSubmission(t *testing.T) {
 		})
 	}
 }
-*/

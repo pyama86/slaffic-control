@@ -78,24 +78,7 @@ func (h *Handler) Handle() error {
 					slog.Error("Failed to cast to EventsAPIEvent")
 					continue
 				}
-				switch eventPayload.Type {
-				case slackevents.CallbackEvent:
-					innerEvent := eventPayload.InnerEvent
-					switch event := innerEvent.Data.(type) {
-					case *slackevents.AppMentionEvent:
-						h.handleMention(event)
-					case *slackevents.ReactionAddedEvent:
-						if event.Reaction == "white_check_mark" {
-							h.handleReaction(true, event.Item.Timestamp)
-						}
-					case *slackevents.ReactionRemovedEvent:
-						if event.Reaction == "white_check_mark" {
-							h.handleReaction(false, event.Item.Timestamp)
-						}
-					}
-				default:
-					slog.Warn("Unsupported EventsAPIEvent type", slog.Any("type", eventPayload.Type))
-				}
+				h.handleCallBack(&eventPayload)
 			case socketmode.EventTypeInteractive:
 				socketMode.Ack(*envelope.Request)
 				callback, ok := envelope.Data.(slack.InteractionCallback)
@@ -103,84 +86,7 @@ func (h *Handler) Handle() error {
 					slog.Error("Failed to cast to InteractionCallback")
 					continue
 				}
-				switch callback.Type {
-				case slack.InteractionTypeBlockActions:
-					if len(callback.ActionCallback.BlockActions) < 1 {
-						return
-					}
-					action := callback.ActionCallback.BlockActions[0]
-
-					switch action.ActionID {
-					case "inquiry_action":
-						if err := h.openInquiryModal(callback.TriggerID, callback.Channel.ID); err != nil {
-							slog.Error("openInquiryModal failed", slog.Any("err", err))
-
-							return
-						}
-					case "history_action":
-						if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
-							slog.Error("showInquiries failed", slog.Any("err", err))
-							return
-						}
-					case "mention_action":
-						if err := h.openMentionSettingModal(callback.TriggerID, callback.Channel.ID); err != nil {
-							slog.Error("openMentionSettingModal failed", slog.Any("err", err))
-							return
-						}
-					}
-				case slack.InteractionTypeViewSubmission:
-					user, err := h.getUserInfo(callback.User.ID)
-					if err != nil {
-						slog.Error("GetUserInfo failed", slog.Any("err", err))
-						return
-					}
-
-					// 投稿者の名前（表示名があれば優先）
-					userName := user.Profile.DisplayName
-					if userName == "" {
-						userName = user.RealName
-					}
-
-					switch callback.View.CallbackID {
-					case "inquiry_modal":
-						// 問い合わせの受付
-						inputValue := callback.View.State.Values["inquiry_block"]["inquiry_text"].Value
-						priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
-						channelID := callback.View.PrivateMetadata
-
-						t, err := h.postInquiryRichMessage(channelID, priority, inputValue)
-						if err != nil {
-							slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
-							return
-						}
-
-						if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName); err != nil {
-							slog.Error("saveInquiry failed", slog.Any("err", err))
-							return
-						}
-
-					case "mention_setting_modal":
-						// メンションの保存
-						mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
-						channelID := callback.View.PrivateMetadata
-						err := h.saveMentionSetting(mentionsRaw, channelID, userName)
-						if err != nil {
-							slog.Error("saveMentionSetting failed", slog.Any("err", err))
-							if _, err := h.client.PostEphemeral(
-								channelID,
-								callback.User.ID,
-								slack.MsgOptionText(
-									fmt.Sprintf(":warning: メンション設定の保存に失敗しました。\n```%s```", err.Error()),
-									false,
-								),
-							); err != nil {
-								slog.Error("Failed to post ephemeral message", slog.Any("err", err))
-								return
-							}
-						}
-					}
-				}
-
+				h.handleInteractions(&callback)
 			default:
 				socketMode.Debugf("Skipped: %v", envelope.Type)
 			}
@@ -189,7 +95,106 @@ func (h *Handler) Handle() error {
 
 	return socketMode.Run()
 }
+func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
+	switch callback.Type {
+	case slack.InteractionTypeBlockActions:
+		if len(callback.ActionCallback.BlockActions) < 1 {
+			return
+		}
+		action := callback.ActionCallback.BlockActions[0]
 
+		switch action.ActionID {
+		case "inquiry_action":
+			if err := h.openInquiryModal(callback.TriggerID, callback.Channel.ID); err != nil {
+				slog.Error("openInquiryModal failed", slog.Any("err", err))
+
+				return
+			}
+		case "history_action":
+			if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
+				slog.Error("showInquiries failed", slog.Any("err", err))
+				return
+			}
+		case "mention_action":
+			if err := h.openMentionSettingModal(callback.TriggerID, callback.Channel.ID); err != nil {
+				slog.Error("openMentionSettingModal failed", slog.Any("err", err))
+				return
+			}
+		}
+	case slack.InteractionTypeViewSubmission:
+		user, err := h.getUserInfo(callback.User.ID)
+		if err != nil {
+			slog.Error("GetUserInfo failed", slog.Any("err", err))
+			return
+		}
+
+		// 投稿者の名前（表示名があれば優先）
+		userName := user.Profile.DisplayName
+		if userName == "" {
+			userName = user.RealName
+		}
+
+		switch callback.View.CallbackID {
+		case "inquiry_modal":
+			// 問い合わせの受付
+			inputValue := callback.View.State.Values["inquiry_block"]["inquiry_text"].Value
+			priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
+			channelID := callback.View.PrivateMetadata
+
+			t, err := h.postInquiryRichMessage(channelID, priority, inputValue)
+			if err != nil {
+				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
+				return
+			}
+
+			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName); err != nil {
+				slog.Error("saveInquiry failed", slog.Any("err", err))
+				return
+			}
+
+		case "mention_setting_modal":
+			// メンションの保存
+			mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
+			channelID := callback.View.PrivateMetadata
+			err := h.saveMentionSetting(mentionsRaw, channelID, userName)
+			if err != nil {
+				slog.Error("saveMentionSetting failed", slog.Any("err", err))
+				if _, err := h.client.PostEphemeral(
+					channelID,
+					callback.User.ID,
+					slack.MsgOptionText(
+						fmt.Sprintf(":warning: メンション設定の保存に失敗しました。\n```%s```", err.Error()),
+						false,
+					),
+				); err != nil {
+					slog.Error("Failed to post ephemeral message", slog.Any("err", err))
+					return
+				}
+			}
+		}
+	}
+}
+
+func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
+	switch event.Type {
+	case slackevents.CallbackEvent:
+		innerEvent := event.InnerEvent
+		switch ev := innerEvent.Data.(type) {
+		case *slackevents.AppMentionEvent:
+			h.handleMention(ev)
+		case *slackevents.ReactionAddedEvent:
+			if ev.Reaction == "white_check_mark" {
+				h.handleReaction(true, ev.Item.Timestamp)
+			}
+		case *slackevents.ReactionRemovedEvent:
+			if ev.Reaction == "white_check_mark" {
+				h.handleReaction(false, ev.Item.Timestamp)
+			}
+		}
+	default:
+		slog.Warn("Unsupported EventsAPIEvent type", slog.Any("type", event.Type))
+	}
+}
 func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	titleText := slack.NewTextBlockObject("plain_text", "📩 問い合わせフォーム", false, false)
 	submitText := slack.NewTextBlockObject("plain_text", "✅ 送信", false, false)
