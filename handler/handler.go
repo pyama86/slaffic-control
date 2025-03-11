@@ -693,9 +693,14 @@ func (h *Handler) StartRotationMonitor() {
 		slog.Error("Invalid ROTATION_DAY", slog.Any("day", dayStr))
 		return
 	}
+	loc, err := time.LoadLocation("Asia/Tokyo") // 日本時間
+	if err != nil {
+		slog.Error("Failed to load location", slog.Any("err", err))
+		os.Exit(1)
+		return
+	}
 
 	go func() {
-		loc, _ := time.LoadLocation("Asia/Tokyo") // 日本時間
 		for {
 			now := time.Now().In(loc)
 			nextRotation := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, loc)
