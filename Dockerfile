@@ -8,6 +8,7 @@ RUN mkdir -p /opt/slaffic-control/db
 FROM scratch
 COPY --from=builder /opt/slaffic-control/bin/slaffic-control /bin/slaffic-control
 COPY --from=builder /opt/slaffic-control/db /opt/slaffic-control/db
+COPY --from=builder /usr/share/zoneinfo /usr/share/zoneinfo
 EXPOSE 3000
 ENV DB_PATH=/opt/slaffic-control/db/slaffic.db
 CMD ["/bin/slaffic-control"]
