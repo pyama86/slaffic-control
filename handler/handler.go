@@ -637,7 +637,7 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 		t := i.CreatedAt.Format("2006-01-02 15:04:05")
 
 		// SlackメッセージURLの生成
-		slackURL := fmt.Sprintf("%s/archives/%s/p%s", workspaceURL, channelID, i.Timestamp)
+		slackURL := fmt.Sprintf("%s/archives/%s/p%s", workspaceURL, i.ChannelID, i.Timestamp)
 
 		// 投稿者名の取得（メンションが飛ばないように）
 		postedBy := "不明"
