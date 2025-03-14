@@ -11,7 +11,6 @@ import (
 	"github.com/pyama86/slaffic-control/domain/infra"
 	"github.com/pyama86/slaffic-control/domain/model"
 	"github.com/slack-go/slack"
-	"github.com/slack-go/slack/slackevents"
 	"github.com/slack-go/slack/slacktest"
 	"github.com/stretchr/testify/assert"
 	gomock "go.uber.org/mock/gomock"
@@ -385,7 +384,7 @@ func TestHandler_handleMention(t *testing.T) {
 			postEphemeralPayloads = nil
 
 			// アプリメンションイベントを模擬
-			event := &slackevents.AppMentionEvent{
+			event := &myEvent{
 				User:    "U111",
 				Channel: "C999",
 				Text:    fmt.Sprintf("<@%s> %s", h.getBotUserID(), tt.messageText),

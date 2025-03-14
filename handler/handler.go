@@ -141,6 +141,20 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 			priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
 			channelID := callback.View.PrivateMetadata
 
+			if strings.HasPrefix(channelID, "D") {
+				_, err := h.client.PostEphemeral(
+					channelID,
+					callback.User.ID,
+					slack.MsgOptionText(
+						":warning: ダイレクトメッセージへの問い合わせはできません。",
+						false,
+					),
+				)
+				if err != nil {
+					slog.Error("Failed to post ephemeral message", slog.Any("err", err))
+				}
+				return
+			}
 			t, err := h.postInquiryRichMessage(channelID, priority, inputValue, "")
 			if err != nil {
 				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
@@ -180,8 +194,22 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 	case slackevents.CallbackEvent:
 		innerEvent := event.InnerEvent
 		switch ev := innerEvent.Data.(type) {
+		case *slackevents.MessageEvent:
+			// DMでメンションされたとき
+			if ev.ChannelType == "im" && strings.Contains(ev.Text, fmt.Sprintf("<@%s>", h.getBotUserID())) {
+				h.handleMention(&myEvent{
+					Channel: ev.Channel,
+					User:    ev.User,
+					Text:    ev.Text,
+				})
+			}
 		case *slackevents.AppMentionEvent:
-			h.handleMention(ev)
+			h.handleMention(&myEvent{
+				Channel:         ev.Channel,
+				User:            ev.User,
+				Text:            ev.Text,
+				ThreadTimeStamp: ev.ThreadTimeStamp,
+			})
 		case *slackevents.ReactionAddedEvent:
 			if ev.Reaction == "white_check_mark" {
 				h.handleReaction(true, ev.Item.Timestamp)
@@ -869,8 +897,15 @@ func (h *Handler) handleReaction(done bool, timestamp string) {
 	slog.Info("Inquiry update", slog.String("timestamp", timestamp), slog.Bool("done", done))
 }
 
+type myEvent struct {
+	Channel         string `json:"channel"`
+	Text            string `json:"text"`
+	User            string `json:"user"`
+	ThreadTimeStamp string `json:"thread_ts"`
+}
+
 // メンションを受け取ったときの処理
-func (h *Handler) handleMention(event *slackevents.AppMentionEvent) {
+func (h *Handler) handleMention(event *myEvent) {
 	channelID := event.Channel
 	userID := event.User
 
@@ -879,7 +914,7 @@ func (h *Handler) handleMention(event *slackevents.AppMentionEvent) {
 	messageText = strings.TrimSpace(messageText) // 余計なスペースを削除
 
 	// もしメンションにテキストが含まれていれば、問い合わせとして処理
-	if messageText != "" {
+	if messageText != "" && !strings.HasPrefix(event.Channel, "D") {
 		priority := "未設定"
 
 		// Slack API から投稿者の情報を取得

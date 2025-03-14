@@ -30,7 +30,8 @@ slackのApp Manifestを使って、Slack Appを作成します。
             "bot_events": [
                 "app_mention",
                 "reaction_added",
-                "reaction_removed"
+                "reaction_removed",
+                "message:im",
             ]
         },
         "interactivity": {
