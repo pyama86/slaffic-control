@@ -141,7 +141,7 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 			priority := callback.View.State.Values["priority_block"]["priority_select"].SelectedOption.Value
 			channelID := callback.View.PrivateMetadata
 
-			t, err := h.postInquiryRichMessage(channelID, priority, inputValue)
+			t, err := h.postInquiryRichMessage(channelID, priority, inputValue, "")
 			if err != nil {
 				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
 				return
@@ -274,7 +274,7 @@ func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	_, err := h.client.OpenView(triggerID, view)
 	return err
 }
-func (h *Handler) postInquiryRichMessage(channelID, priority, content string) (string, error) {
+func (h *Handler) postInquiryRichMessage(channelID, priority, content, threadTs string) (string, error) {
 	setting, err := h.ds.GetMentionSetting(h.getBotUserID())
 	if err != nil {
 		return "", err
@@ -334,8 +334,18 @@ func (h *Handler) postInquiryRichMessage(channelID, priority, content string) (s
 		),
 	}
 
-	// 投稿
-	_, t, err := h.client.PostMessage(channelID, slack.MsgOptionBlocks(blocks...))
+	var t string
+	if threadTs != "" {
+		// スレッドに返信
+		_, t, err = h.client.PostMessage(
+			channelID,
+			slack.MsgOptionBlocks(blocks...),
+			slack.MsgOptionTS(threadTs),
+		)
+	} else {
+		_, t, err = h.client.PostMessage(channelID, slack.MsgOptionBlocks(blocks...))
+	}
+
 	if err != nil {
 		return "", err
 	}
@@ -886,7 +896,13 @@ func (h *Handler) handleMention(event *slackevents.AppMentionEvent) {
 		}
 
 		// 問い合わせをリッチメッセージで投稿
-		timestamp, err := h.postInquiryRichMessage(channelID, priority, messageText)
+		// スレッドでメンションされたか？
+		var threadTs string
+		if event.ThreadTimeStamp != "" {
+			threadTs = event.ThreadTimeStamp
+		}
+
+		timestamp, err := h.postInquiryRichMessage(channelID, priority, messageText, threadTs)
 		if err != nil {
 			slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
 			return
