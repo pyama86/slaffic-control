@@ -10,4 +10,5 @@ type SlackAPI interface {
 	GetUserGroups(options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error)
 	GetUserInfo(userID string) (*slack.User, error)
 	PostEphemeral(channelID, userID string, options ...slack.MsgOption) (string, error)
+	GetConversationHistory(params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error)
 }
