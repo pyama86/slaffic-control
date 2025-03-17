@@ -28,4 +28,4 @@ devdeps:
 	which mockgen > /dev/null || go install go.uber.org/mock/mockgen@latest
 
 mockgen:
-	mockgen -source=domain/infra/slack.go -destination=domain/infra/slack_mock.go -package=main
+	mockgen -source=domain/infra/slack.go -destination=domain/infra/slack_mock.go -package=infra
