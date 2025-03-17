@@ -211,12 +211,16 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 				ThreadTimeStamp: ev.ThreadTimeStamp,
 			})
 		case *slackevents.ReactionAddedEvent:
-			if ev.Reaction == "white_check_mark" {
-				h.handleReaction(true, ev.Item.Timestamp)
+			if ev.ItemUser == h.getBotUserID() {
+				if ev.Reaction == "white_check_mark" {
+					h.handleReaction(true, ev.Item.Timestamp)
+				}
 			}
 		case *slackevents.ReactionRemovedEvent:
-			if ev.Reaction == "white_check_mark" {
-				h.handleReaction(false, ev.Item.Timestamp)
+			if ev.ItemUser == h.getBotUserID() {
+				if ev.Reaction == "white_check_mark" {
+					h.handleReaction(false, ev.Item.Timestamp)
+				}
 			}
 		}
 	default:

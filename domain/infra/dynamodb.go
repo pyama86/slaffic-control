@@ -224,6 +224,9 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 
 	for _, item := range result.Items {
 		createdAtStr := getStringValue(item, "created_at")
+		if createdAtStr == "" {
+			continue
+		}
 		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse created_at (%s): %v", createdAtStr, err)
