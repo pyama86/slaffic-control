@@ -211,16 +211,12 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 				ThreadTimeStamp: ev.ThreadTimeStamp,
 			})
 		case *slackevents.ReactionAddedEvent:
-			if ev.ItemUser == h.getBotUserID() {
-				if ev.Reaction == "white_check_mark" {
-					h.handleReaction(true, ev.Item.Timestamp)
-				}
+			if ev.Reaction == "white_check_mark" {
+				h.handleReaction(true, ev.Item.Timestamp)
 			}
 		case *slackevents.ReactionRemovedEvent:
-			if ev.ItemUser == h.getBotUserID() {
-				if ev.Reaction == "white_check_mark" {
-					h.handleReaction(false, ev.Item.Timestamp)
-				}
+			if ev.Reaction == "white_check_mark" {
+				h.handleReaction(false, ev.Item.Timestamp)
 			}
 		}
 	default:
@@ -916,6 +912,12 @@ func (h *Handler) handleMention(event *myEvent) {
 	// ボット自身のメンション (`@bot`) を削除
 	messageText := strings.Replace(event.Text, fmt.Sprintf("<@%s>", h.getBotUserID()), "", 1)
 	messageText = strings.TrimSpace(messageText) // 余計なスペースを削除
+	// 問い合わせをリッチメッセージで投稿
+	// スレッドでメンションされたか？
+	var threadTs string
+	if event.ThreadTimeStamp != "" {
+		threadTs = event.ThreadTimeStamp
+	}
 
 	// もしメンションにテキストが含まれていれば、問い合わせとして処理
 	if messageText != "" && !strings.HasPrefix(event.Channel, "D") {
@@ -932,50 +934,6 @@ func (h *Handler) handleMention(event *myEvent) {
 		userName := user.Profile.DisplayName
 		if userName == "" {
 			userName = user.RealName
-		}
-
-		// 問い合わせをリッチメッセージで投稿
-		// スレッドでメンションされたか？
-		var threadTs string
-		if event.ThreadTimeStamp != "" {
-			threadTs = event.ThreadTimeStamp
-			mentionTS, err := h.firstMentionIn(
-				channelID,
-				event.ThreadTimeStamp,
-				fmt.Sprintf("<@%s>", h.getBotUserID()),
-			)
-
-			if err != nil {
-				slog.Error("firstMentionIn failed", slog.Any("err", err))
-				return
-			}
-
-			if mentionTS != "" {
-				setting, err := h.ds.GetMentionSetting(h.getBotUserID())
-				if err != nil {
-					slog.Error("GetMentionSetting failed", slog.Any("err", err))
-					return
-				}
-				mention, err := setting.GetCurrentMention()
-				if err != nil {
-					slog.Error("GetCurrentMention failed", slog.Any("err", err))
-					return
-				}
-				// 同じメンションで催促するだけ
-				_, _, err = h.client.PostMessage(
-					channelID,
-					slack.MsgOptionText(
-						fmt.Sprintf("%s さん、回答をお待ちしています。", mention),
-						false,
-					),
-					slack.MsgOptionTS(event.ThreadTimeStamp),
-				)
-				if err != nil {
-					slog.Error("Failed to post message", slog.Any("err", err))
-				}
-				return
-			}
-
 		}
 
 		timestamp, err := h.postInquiryRichMessage(channelID, priority, messageText, threadTs)
@@ -1030,28 +988,4 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 			},
 		},
 	}
-}
-
-func (h *Handler) firstMentionIn(channelID, threadTs, mention string) (string, error) {
-	history, err := h.client.GetConversationHistory(&slack.GetConversationHistoryParameters{
-		ChannelID: channelID,
-		Inclusive: true,
-		Latest:    threadTs,
-		Limit:     1,
-		Oldest:    threadTs,
-	})
-
-	if err != nil {
-		return "", fmt.Errorf("GetConversationHistory failed: %w", err)
-	}
-	if len(history.Messages) == 0 {
-		return "", fmt.Errorf("No messages found in thread")
-	}
-
-	for _, msg := range history.Messages {
-		if strings.Contains(msg.Text, mention) {
-			return msg.Timestamp, nil
-		}
-	}
-	return "", nil
 }
