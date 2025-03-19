@@ -10,6 +10,7 @@ type Inquiry struct {
 	Timestamp string `gorm:"type:varchar(20)"`
 	UserID    string `gorm:"type:varchar(50)"`  // 投稿者の Slack ユーザー ID
 	UserName  string `gorm:"type:varchar(100)"` // 投稿者の名前
+	Mention   string `gorm:"type:varchar(50)"`  // メンション先の Slack ユーザー ID
 	Done      bool
 	CreatedAt time.Time
 }
