@@ -34,8 +34,8 @@ func TestHandler_saveInquiry(t *testing.T) {
 	channelID := "channel_id"
 	userID := "user_id"
 	userName := "user_name"
-
-	err = handler.saveInquiry(message, timestamp, channelID, userID, userName)
+	mention := "mention"
+	err = handler.saveInquiry(message, timestamp, channelID, userID, userName, mention)
 	assert.NoError(t, err)
 
 	inquiries, err := handler.ds.GetLatestInquiries(botID)

@@ -155,13 +155,19 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				}
 				return
 			}
-			t, err := h.postInquiryRichMessage(channelID, priority, inputValue, "")
+			mention, err := h.getMention()
+			if err != nil {
+				slog.Error("getMention failed", slog.Any("err", err))
+				return
+			}
+
+			t, err := h.postInquiryRichMessage(channelID, priority, inputValue, "", mention)
 			if err != nil {
 				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
 				return
 			}
 
-			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName); err != nil {
+			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName, mention); err != nil {
 				slog.Error("saveInquiry failed", slog.Any("err", err))
 				return
 			}
@@ -302,32 +308,22 @@ func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	_, err := h.client.OpenView(triggerID, view)
 	return err
 }
-func (h *Handler) postInquiryRichMessage(channelID, priority, content, threadTs string) (string, error) {
+
+func (h *Handler) getMention() (string, error) {
 	setting, err := h.ds.GetMentionSetting(h.getBotUserID())
 	if err != nil {
 		return "", err
 	}
-	first := "未設定"
-	if setting.BotID != "" && setting.Usernames != "" {
-
-		ids := parseCSV(setting.Usernames)
-		if len(ids) == 0 {
-			_, t, err := h.client.PostMessage(channelID, slack.MsgOptionText("*📩 新しい問い合わせが届きました*\n>>> "+content, false))
-			if err != nil {
-				return "", err
-			}
-			return t, nil
-		}
-
-		first = ids[0]
-	}
 	mention := "未設定"
-	if strings.HasPrefix(first, "S") {
-		mention = fmt.Sprintf("<!subteam^%s>", first) // グループメンション
-	} else if strings.HasPrefix(first, "U") {
-		mention = fmt.Sprintf("<@%s>", first) // ユーザーメンション
+	if setting.BotID != "" && setting.Usernames != "" {
+		mention, err = setting.GetCurrentMention()
+		if err != nil {
+			return "", err
+		}
 	}
-
+	return mention, nil
+}
+func (h *Handler) postInquiryRichMessage(channelID, priority, content, threadTs, mention string) (string, error) {
 	blocks := []slack.Block{
 		// ヘッダー
 		slack.NewHeaderBlock(
@@ -363,6 +359,7 @@ func (h *Handler) postInquiryRichMessage(channelID, priority, content, threadTs 
 	}
 
 	var t string
+	var err error
 	if threadTs != "" {
 		// スレッドに返信
 		_, t, err = h.client.PostMessage(
@@ -428,13 +425,14 @@ func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 	return err
 }
 
-func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName string) error {
+func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName, mention string) error {
 	return h.ds.SaveInquiry(&model.Inquiry{
 		BotID:     h.getBotUserID(),
 		Message:   message,
 		Timestamp: timestamp,
 		ChannelID: channelID,
 		UserID:    userID,
+		Mention:   mention,
 		UserName:  userName,
 		CreatedAt: time.Now(),
 	})
@@ -685,8 +683,8 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 
 		blocks = append(blocks, slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("👤 *投稿者:* %s\n📅 *%s*\n📝 [%d] %s\n📎 <%s|詳細を見る>",
-					postedBy, t, i.ID, i.Message, slackURL),
+				fmt.Sprintf("👤 *投稿者:* %s\n🙋‍♂️ *担当者:* %s\n📅 *%s*\n📝 [%d] %s\n📎 <%s|詳細を見る>",
+					postedBy, i.Mention, t, i.ID, i.Message, slackURL),
 				false, false),
 			nil, nil,
 		))
@@ -936,14 +934,19 @@ func (h *Handler) handleMention(event *myEvent) {
 			userName = user.RealName
 		}
 
-		timestamp, err := h.postInquiryRichMessage(channelID, priority, messageText, threadTs)
+		mention, err := h.getMention()
+		if err != nil {
+			slog.Error("getMention failed", slog.Any("err", err))
+			return
+		}
+		timestamp, err := h.postInquiryRichMessage(channelID, priority, messageText, threadTs, mention)
 		if err != nil {
 			slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
 			return
 		}
 
 		// 投稿者の情報も含めて問い合わせを保存
-		if err := h.saveInquiry(messageText, timestamp, channelID, userID, userName); err != nil {
+		if err := h.saveInquiry(messageText, timestamp, channelID, userID, userName, mention); err != nil {
 			slog.Error("saveInquiry failed", slog.Any("err", err))
 			return
 		}
