@@ -44,13 +44,17 @@ func NewHandler() (*Handler, error) {
 	}
 
 	api := slack.New(os.Getenv("SLACK_BOT_TOKEN"))
-	return &Handler{
+	h := &Handler{
 		client:        api,
 		userCache:     ttlcache.New(ttlcache.WithTTL[string, []slack.User](time.Hour)),
 		groupCache:    ttlcache.New(ttlcache.WithTTL[string, []slack.UserGroup](time.Hour)),
 		userInfoCache: ttlcache.New(ttlcache.WithTTL[string, *slack.User](24 * time.Hour)),
 		ds:            ds,
-	}, nil
+	}
+	go h.userCache.Start()
+	go h.groupCache.Start()
+	go h.userInfoCache.Start()
+	return h, nil
 }
 
 func (h *Handler) Handle() error {
