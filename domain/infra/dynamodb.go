@@ -325,3 +325,49 @@ func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
 	_, err := d.db.UpdateItem(context.TODO(), input)
 	return err
 }
+
+func (d *DynamoDB) GetInquiry(botID, ts string) (*model.Inquiry, error) {
+	input := &dynamodb.GetItemInput{
+		TableName: aws.String(inquiryTableName),
+		Key: map[string]types.AttributeValue{
+			"bot_id":    &types.AttributeValueMemberS{Value: botID},
+			"timestamp": &types.AttributeValueMemberS{Value: ts},
+		},
+	}
+
+	result, err := d.db.GetItem(context.TODO(), input)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.Item == nil {
+		return nil, nil
+	}
+
+	createdAtStr := getStringValue(result.Item, "created_at")
+	if createdAtStr == "" {
+		return nil, fmt.Errorf("created_at is empty")
+	}
+	createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse created_at (%s): %v", createdAtStr, err)
+	}
+
+	done, err := getNumberValue(result.Item, "done")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse done: %v", err)
+	}
+
+	inquiry := model.Inquiry{
+		Timestamp: getStringValue(result.Item, "timestamp"),
+		UserID:    getStringValue(result.Item, "user_id"),
+		UserName:  getStringValue(result.Item, "user_name"),
+		Mention:   getStringValue(result.Item, "mention"),
+		Message:   getStringValue(result.Item, "message"),
+		ChannelID: getStringValue(result.Item, "channel_id"),
+		CreatedAt: createdAt,
+		Done:      done == 1,
+	}
+
+	return &inquiry, nil
+}

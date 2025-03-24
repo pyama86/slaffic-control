@@ -31,7 +31,7 @@ func NewDataBase() (*DataBase, error) {
 }
 
 func (d *DataBase) SaveInquiry(inquiry *model.Inquiry) error {
-	return d.db.Create(inquiry).Error
+	return d.db.Save(inquiry).Error
 }
 
 func (d *DataBase) GetMentionSetting(id string) (*model.MentionSetting, error) {
@@ -56,4 +56,13 @@ func (d *DataBase) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 
 func (d *DataBase) UpdateInquiryDone(botID, timestamp string, done bool) error {
 	return d.db.Model(&model.Inquiry{}).Where("bot_id = ? AND timestamp = ?", botID, timestamp).Update("done", done).Error
+}
+
+func (d *DataBase) GetInquiry(botID, timestamp string) (*model.Inquiry, error) {
+	var inquiry model.Inquiry
+	err := d.db.Where("bot_id = ? AND timestamp = ?", botID, timestamp).First(&inquiry).Error
+	if err == gorm.ErrRecordNotFound {
+		return &inquiry, nil
+	}
+	return &inquiry, err
 }

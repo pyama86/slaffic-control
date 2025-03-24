@@ -55,6 +55,22 @@ func (mr *MockSlackAPIMockRecorder) AuthTest() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "AuthTest", reflect.TypeOf((*MockSlackAPI)(nil).AuthTest))
 }
 
+// DeleteMessage mocks base method.
+func (m *MockSlackAPI) DeleteMessage(channelID, ts string) (string, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "DeleteMessage", channelID, ts)
+	ret0, _ := ret[0].(string)
+	ret1, _ := ret[1].(string)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// DeleteMessage indicates an expected call of DeleteMessage.
+func (mr *MockSlackAPIMockRecorder) DeleteMessage(channelID, ts any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "DeleteMessage", reflect.TypeOf((*MockSlackAPI)(nil).DeleteMessage), channelID, ts)
+}
+
 // GetConversationHistory mocks base method.
 func (m *MockSlackAPI) GetConversationHistory(params *slack.GetConversationHistoryParameters) (*slack.GetConversationHistoryResponse, error) {
 	m.ctrl.T.Helper()
@@ -68,6 +84,23 @@ func (m *MockSlackAPI) GetConversationHistory(params *slack.GetConversationHisto
 func (mr *MockSlackAPIMockRecorder) GetConversationHistory(params any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConversationHistory", reflect.TypeOf((*MockSlackAPI)(nil).GetConversationHistory), params)
+}
+
+// GetConversationReplies mocks base method.
+func (m *MockSlackAPI) GetConversationReplies(params *slack.GetConversationRepliesParameters) ([]slack.Message, bool, string, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetConversationReplies", params)
+	ret0, _ := ret[0].([]slack.Message)
+	ret1, _ := ret[1].(bool)
+	ret2, _ := ret[2].(string)
+	ret3, _ := ret[3].(error)
+	return ret0, ret1, ret2, ret3
+}
+
+// GetConversationReplies indicates an expected call of GetConversationReplies.
+func (mr *MockSlackAPIMockRecorder) GetConversationReplies(params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConversationReplies", reflect.TypeOf((*MockSlackAPI)(nil).GetConversationReplies), params)
 }
 
 // GetUserGroups mocks base method.
