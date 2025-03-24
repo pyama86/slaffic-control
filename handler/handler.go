@@ -741,13 +741,18 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 		}
 
 		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", i.Message, false, false),
+			slack.NewTextBlockObject("mrkdwn", "*問い合わせ日時:* "+t, false, false),
 			[]*slack.TextBlockObject{
 				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*投稿者:* %s", postedBy), false, false),
 				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*担当者:* %s", i.Mention), false, false),
-				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*日時:* %s", t), false, false),
 				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*詳細:* <%s|詳細を見る>", slackURL), false, false),
 			},
+			nil,
+		))
+
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", i.Message, false, false),
+			nil,
 			nil,
 		))
 

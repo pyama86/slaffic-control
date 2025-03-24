@@ -168,7 +168,7 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 			for _, f := range fields {
 				field, _ := f.(map[string]interface{})
 				txt, _ := field["text"].(string)
-				if strings.Contains(txt, "日時") {
+				if strings.Contains(txt, "投稿者") {
 					inquiryCount++
 				}
 
@@ -286,7 +286,7 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 			for _, f := range fields {
 				field, _ := f.(map[string]interface{})
 				txt, _ := field["text"].(string)
-				if strings.Contains(txt, "日時") {
+				if strings.Contains(txt, "投稿者") {
 					inquiryCount++
 				}
 
