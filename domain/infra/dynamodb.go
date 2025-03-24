@@ -318,7 +318,8 @@ func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
 		},
 		UpdateExpression: aws.String("SET done = :done"),
 		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":done": &types.AttributeValueMemberN{Value: doneValue},
+			":done":    &types.AttributeValueMemberN{Value: doneValue},
+			":done_at": &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
 		},
 	}
 

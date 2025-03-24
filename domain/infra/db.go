@@ -55,7 +55,9 @@ func (d *DataBase) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 }
 
 func (d *DataBase) UpdateInquiryDone(botID, timestamp string, done bool) error {
-	return d.db.Model(&model.Inquiry{}).Where("bot_id = ? AND timestamp = ?", botID, timestamp).Update("done", done).Error
+	return d.db.Model(&model.Inquiry{}).
+		Where("bot_id = ? AND timestamp = ?", botID, timestamp).
+		Update("done", done, "done_at", gorm.Expr("datetime('now')")).Error
 }
 
 func (d *DataBase) GetInquiry(botID, timestamp string) (*model.Inquiry, error) {
