@@ -1110,6 +1110,8 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 		if err := h.ds.SaveInquiry(inquiry); err != nil {
 			return fmt.Errorf("UpdateInquiry failed: %w", err)
 		}
+	} else {
+		slog.Warn("Inquiry not found", slog.String("botID", h.getBotUserID()), slog.String("timestamp", botMessage.Timestamp), slog.String("userID", userID), slog.String("channelID", channelID), slog.String("ts", ts))
 	}
 
 	blocks := []slack.Block{
