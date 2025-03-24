@@ -161,10 +161,17 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 	for _, b := range blocks {
 		typ, _ := b["type"].(string)
 		if typ == "section" {
-			textObj, _ := b["text"].(map[string]interface{})
-			txt, _ := textObj["text"].(string)
-			if strings.Contains(txt, "📝") && strings.Contains(txt, "📅") {
-				inquiryCount++
+			fields, _ := b["fields"].([]interface{})
+			if fields == nil {
+				continue
+			}
+			for _, f := range fields {
+				field, _ := f.(map[string]interface{})
+				txt, _ := field["text"].(string)
+				if strings.Contains(txt, "日時") {
+					inquiryCount++
+				}
+
 			}
 		}
 	}
@@ -268,15 +275,21 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 		t.Fatalf("blocks is not an array of map: %T", req["blocks"])
 	}
 
-	// blocks の中で "📝" と "📅" が含まれるSectionが問い合わせ行とみなす
 	var inquiryCount int
 	for _, b := range blocks {
 		typ, _ := b["type"].(string)
 		if typ == "section" {
-			textObj, _ := b["text"].(map[string]interface{})
-			txt, _ := textObj["text"].(string)
-			if strings.Contains(txt, "📝") && strings.Contains(txt, "📅") {
-				inquiryCount++
+			fields, _ := b["fields"].([]interface{})
+			if fields == nil {
+				continue
+			}
+			for _, f := range fields {
+				field, _ := f.(map[string]interface{})
+				txt, _ := field["text"].(string)
+				if strings.Contains(txt, "日時") {
+					inquiryCount++
+				}
+
 			}
 		}
 	}
