@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -250,6 +251,10 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 		inquiries = append(inquiries, inquiry)
 	}
 
+	// Dynamoでうまいことソートできないのでここでソート
+	sort.Slice(inquiries, func(i, j int) bool {
+		return inquiries[i].CreatedAt.After(inquiries[j].CreatedAt)
+	})
 	return inquiries, nil
 }
 
