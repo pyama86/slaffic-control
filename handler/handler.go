@@ -124,7 +124,22 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				slog.Error("openMentionSettingModal failed", slog.Any("err", err))
 				return
 			}
+		case "handler_button":
+
+			if err := h.submitHandler(callback.User.ID, callback.Channel.ID, callback.Message.Timestamp); err != nil {
+				slog.Error("submitHandler failed", slog.Any("err", err))
+				return
+			}
+			if _, _, err := h.client.DeleteMessage(
+				callback.Channel.ID,
+				callback.Message.Timestamp,
+			); err != nil {
+				slog.Error("Failed to delete message", slog.Any("err", err))
+				return
+			}
+
 		}
+
 	case slack.InteractionTypeViewSubmission:
 		user, err := h.getUserInfo(callback.User.ID)
 		if err != nil {
@@ -165,7 +180,7 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				return
 			}
 
-			t, err := h.postInquiryRichMessage(channelID, priority, inputValue, "", mention)
+			t, err := h.postInquiryRichMessage(channelID, callback.User.ID, priority, inputValue, "", mention)
 			if err != nil {
 				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
 				return
@@ -174,6 +189,15 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName, mention); err != nil {
 				slog.Error("saveInquiry failed", slog.Any("err", err))
 				return
+			}
+
+			// ハンドラを募集する
+			if _, _, err := h.client.PostMessage(
+				channelID,
+				slack.MsgOptionTS(t),
+				slack.MsgOptionBlocks(h.personInChargeMessage()...),
+			); err != nil {
+				slog.Error("Failed to post person in charge message", slog.Any("err", err))
 			}
 
 		case "mention_setting_modal":
@@ -327,11 +351,17 @@ func (h *Handler) getMention() (string, error) {
 	}
 	return mention, nil
 }
-func (h *Handler) postInquiryRichMessage(channelID, priority, content, threadTs, mention string) (string, error) {
+func (h *Handler) postInquiryRichMessage(channelID, userID, priority, content, threadTs, mention string) (string, error) {
 	blocks := []slack.Block{
 		// ヘッダー
 		slack.NewHeaderBlock(
 			slack.NewTextBlockObject("plain_text", "📩 新しい問い合わせ", false, false),
+		),
+		slack.NewDividerBlock(),
+		// 問い合わせ作成ユーザー
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*👤 投稿者:* <@%s>", userID), false, false),
+			nil, nil,
 		),
 		slack.NewDividerBlock(),
 		// 担当者情報
@@ -356,9 +386,11 @@ func (h *Handler) postInquiryRichMessage(channelID, priority, content, threadTs,
 		),
 		slack.NewDividerBlock(),
 		// white_check_markリアクションについての説明
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", "✅のリアクションを付けると、この問い合わせは履歴から表示されなくなります。", false, false),
-			nil, nil,
+		slack.NewContextBlock("context_block",
+			[]slack.MixedElement{
+				slack.NewTextBlockObject("mrkdwn", "問い合わせに関するやり取りはこのメッセージのスレッドで進行してください。", false, false),
+				slack.NewTextBlockObject("mrkdwn", "✅のリアクションを付けると、この問い合わせは履歴から表示されなくなります。", false, false),
+			}...,
 		),
 	}
 
@@ -379,6 +411,29 @@ func (h *Handler) postInquiryRichMessage(channelID, priority, content, threadTs,
 		return "", err
 	}
 	return t, nil
+}
+
+// 担当者を募るメッセージ
+func (h *Handler) personInChargeMessage() []slack.Block {
+	return []slack.Block{
+		slack.NewHeaderBlock(
+			slack.NewTextBlockObject("plain_text", "🚨 担当者募集！", false, false),
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "💻 問い合わせを主に担当するメンバーを募集しています", false, false),
+			nil,
+			nil,
+		),
+		slack.NewDividerBlock(),
+		slack.NewActionBlock(
+			"handler_action",
+			slack.NewButtonBlockElement(
+				"handler_button",
+				"handler_button",
+				slack.NewTextBlockObject("plain_text", "👋 担当者は私です！", false, false),
+			).WithStyle(slack.StylePrimary),
+		),
+	}
 }
 
 func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
@@ -686,12 +741,16 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 		}
 
 		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("👤 *投稿者:* %s\n🙋‍♂️ *担当者:* %s\n📅 *%s*\n📝 [%d] %s\n📎 <%s|詳細を見る>",
-					postedBy, i.Mention, t, i.ID, i.Message, slackURL),
-				false, false),
-			nil, nil,
+			slack.NewTextBlockObject("mrkdwn", i.Message, false, false),
+			[]*slack.TextBlockObject{
+				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*投稿者:* %s", postedBy), false, false),
+				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*担当者:* %s", i.Mention), false, false),
+				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*日時:* %s", t), false, false),
+				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*詳細:* <%s|詳細を見る>", slackURL), false, false),
+			},
+			nil,
 		))
+
 		blocks = append(blocks, slack.NewDividerBlock())
 	}
 
@@ -943,7 +1002,7 @@ func (h *Handler) handleMention(event *myEvent) {
 			slog.Error("getMention failed", slog.Any("err", err))
 			return
 		}
-		timestamp, err := h.postInquiryRichMessage(channelID, priority, messageText, threadTs, mention)
+		timestamp, err := h.postInquiryRichMessage(channelID, userID, priority, messageText, threadTs, mention)
 		if err != nil {
 			slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
 			return
@@ -954,6 +1013,16 @@ func (h *Handler) handleMention(event *myEvent) {
 			slog.Error("saveInquiry failed", slog.Any("err", err))
 			return
 		}
+
+		// ハンドラを募集する
+		if _, _, err := h.client.PostMessage(
+			channelID,
+			slack.MsgOptionTS(timestamp),
+			slack.MsgOptionBlocks(h.personInChargeMessage()...),
+		); err != nil {
+			slog.Error("Failed to post person in charge message", slog.Any("err", err))
+		}
+
 		return
 	}
 
@@ -995,4 +1064,64 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 			},
 		},
 	}
+}
+
+// インシデントハンドラーが応募されたら、保存してハンドラに必要なことを通知する
+func (h *Handler) submitHandler(userID, channelID, ts string) error {
+	params := slack.GetConversationRepliesParameters{
+		ChannelID: channelID,
+		Timestamp: ts,
+	}
+
+	replies, _, _, err := h.client.GetConversationReplies(&params)
+	if err != nil {
+		return fmt.Errorf("GetConversationReplies failed: %w", err)
+	}
+	// repliesの中からbotが投稿したメッセージを取得
+	var botMessage slack.Message
+	for _, reply := range replies {
+		if reply.User == h.getBotUserID() {
+			botMessage = reply
+			break
+		}
+	}
+
+	// 問い合わせを検索
+	inquiry, err := h.ds.GetInquiry(h.getBotUserID(), botMessage.Timestamp)
+	if err != nil {
+		return fmt.Errorf("GetInquiry failed: %w", err)
+	}
+
+	// ハンドラを保存
+	inquiry.Mention = userID
+	if err := h.ds.SaveInquiry(inquiry); err != nil {
+		return fmt.Errorf("UpdateInquiry failed: %w", err)
+	}
+
+	blocks := []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject(
+				"mrkdwn",
+				fmt.Sprintf(
+					":wave: <@%s> さん、担当者になっていただきありがとうございます！",
+					userID,
+				),
+				false,
+				false,
+			),
+			nil,
+			nil,
+		),
+	}
+
+	// メッセージを送信
+	if _, _, err := h.client.PostMessage(
+		channelID,
+		slack.MsgOptionTS(ts),
+		slack.MsgOptionBlocks(blocks...),
+	); err != nil {
+		return fmt.Errorf("PostMessage failed: %w", err)
+	}
+
+	return nil
 }

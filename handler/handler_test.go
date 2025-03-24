@@ -409,7 +409,7 @@ func TestHandler_handleMention(t *testing.T) {
 					assert.Equal(t, "C999", inquiries[0].ChannelID)
 				}
 				// 通常メッセージ投稿がされているか
-				assert.Len(t, postMessagePayloads, 1, "chat.postMessage呼び出しが1回のはず")
+				assert.Len(t, postMessagePayloads, 2, "chat.postMessage呼び出しが1回のはず")
 			} else {
 				assert.Len(t, inquiries, 0, "問い合わせは保存されないはず")
 				assert.Len(t, postMessagePayloads, 0, "chat.postMessage呼び出しはないはず")
@@ -560,7 +560,7 @@ func TestHandler_HandleInteractions_ViewSubmission(t *testing.T) {
 				"inquiry_block":  {"inquiry_text": slack.BlockAction{Value: "モーダルからの問い合わせ"}},
 				"priority_block": {"priority_select": slack.BlockAction{SelectedOption: slack.OptionBlockObject{Value: "ウルトラ"}}},
 			},
-			wantMsgCount: 1,
+			wantMsgCount: 2,
 			wantInqCount: 1,
 			wantSetting:  false,
 		},
