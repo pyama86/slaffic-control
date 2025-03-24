@@ -982,6 +982,13 @@ func (h *Handler) handleMention(event *myEvent) {
 
 	// もしメンションにテキストが含まれていれば、問い合わせとして処理
 	if messageText != "" && !strings.HasPrefix(event.Channel, "D") {
+		if messageText == "history" {
+			if err := h.showInquiries(channelID, userID); err != nil {
+				slog.Error("showInquiries failed", slog.Any("err", err))
+			}
+			return
+		}
+
 		priority := "未設定"
 
 		// Slack API から投稿者の情報を取得
