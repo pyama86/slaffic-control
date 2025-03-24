@@ -1092,7 +1092,7 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 	// repliesの中からbotが投稿したメッセージを取得
 	var botMessage slack.Message
 	for _, reply := range replies {
-		if reply.User == h.getBotUserID() {
+		if reply.User == h.getBotUserID() || reply.BotID == h.getBotUserID() {
 			botMessage = reply
 			break
 		}
@@ -1105,9 +1105,11 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 	}
 
 	// ハンドラを保存
-	inquiry.Mention = userID
-	if err := h.ds.SaveInquiry(inquiry); err != nil {
-		return fmt.Errorf("UpdateInquiry failed: %w", err)
+	if inquiry != nil {
+		inquiry.Mention = userID
+		if err := h.ds.SaveInquiry(inquiry); err != nil {
+			return fmt.Errorf("UpdateInquiry failed: %w", err)
+		}
 	}
 
 	blocks := []slack.Block{
