@@ -13,4 +13,5 @@ type Inquiry struct {
 	Mention   string `gorm:"type:varchar(50)"`  // メンション先の Slack ユーザー ID
 	Done      bool
 	CreatedAt time.Time
+	DoneAt    time.Time
 }

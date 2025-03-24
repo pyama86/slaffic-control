@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -184,6 +185,10 @@ func (d *DynamoDB) createTable(tableName string) error {
 }
 
 func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
+	done := 0
+	if inquiry.Done {
+		done = 1
+	}
 	input := &dynamodb.PutItemInput{
 		TableName: aws.String(inquiryTableName),
 		Item: map[string]types.AttributeValue{
@@ -193,8 +198,9 @@ func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
 			"mention":    &types.AttributeValueMemberS{Value: inquiry.Mention},
 			"timestamp":  &types.AttributeValueMemberS{Value: inquiry.Timestamp},
 			"channel_id": &types.AttributeValueMemberS{Value: inquiry.ChannelID},
-			"done":       &types.AttributeValueMemberN{Value: "0"},
+			"done":       &types.AttributeValueMemberN{Value: strconv.Itoa(done)},
 			"created_at": &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+			"done_at":    &types.AttributeValueMemberS{Value: ""},
 			"message":    &types.AttributeValueMemberS{Value: inquiry.Message},
 		},
 	}
@@ -250,6 +256,10 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 		inquiries = append(inquiries, inquiry)
 	}
 
+	// Dynamoでうまいことソートできないのでここでソート
+	sort.Slice(inquiries, func(i, j int) bool {
+		return inquiries[i].CreatedAt.After(inquiries[j].CreatedAt)
+	})
 	return inquiries, nil
 }
 
@@ -306,24 +316,16 @@ func (d *DynamoDB) UpdateMentionSetting(id string, setting *model.MentionSetting
 }
 
 func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
-	doneValue := "0"
-	if done {
-		doneValue = "1"
+	inquiry, err := d.GetInquiry(botID, timestamp)
+	if err != nil {
+		return err
 	}
-	input := &dynamodb.UpdateItemInput{
-		TableName: aws.String(inquiryTableName),
-		Key: map[string]types.AttributeValue{
-			"bot_id":    &types.AttributeValueMemberS{Value: botID},
-			"timestamp": &types.AttributeValueMemberS{Value: timestamp},
-		},
-		UpdateExpression: aws.String("SET done = :done"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
-			":done": &types.AttributeValueMemberN{Value: doneValue},
-		},
+	if inquiry == nil {
+		return fmt.Errorf("inquiry not found: botID=%s, timestamp=%s", botID, timestamp)
 	}
-
-	_, err := d.db.UpdateItem(context.TODO(), input)
-	return err
+	inquiry.Done = done
+	inquiry.DoneAt = time.Now()
+	return d.SaveInquiry(inquiry)
 }
 
 func (d *DynamoDB) GetInquiry(botID, ts string) (*model.Inquiry, error) {
@@ -358,14 +360,25 @@ func (d *DynamoDB) GetInquiry(botID, ts string) (*model.Inquiry, error) {
 		return nil, fmt.Errorf("failed to parse done: %v", err)
 	}
 
+	donedAtStr := getStringValue(result.Item, "done_at")
+	doneAt := time.Time{}
+	if donedAtStr != "" {
+		doneAt, err = time.Parse(time.RFC3339, donedAtStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse done_at (%s): %v", donedAtStr, err)
+		}
+	}
+
 	inquiry := model.Inquiry{
+		BotID:     getStringValue(result.Item, "bot_id"),
+		Message:   getStringValue(result.Item, "message"),
+		ChannelID: getStringValue(result.Item, "channel_id"),
 		Timestamp: getStringValue(result.Item, "timestamp"),
 		UserID:    getStringValue(result.Item, "user_id"),
 		UserName:  getStringValue(result.Item, "user_name"),
 		Mention:   getStringValue(result.Item, "mention"),
-		Message:   getStringValue(result.Item, "message"),
-		ChannelID: getStringValue(result.Item, "channel_id"),
 		CreatedAt: createdAt,
+		DoneAt:    doneAt,
 		Done:      done == 1,
 	}
 
