@@ -125,8 +125,7 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				return
 			}
 		case "handler_button":
-
-			if err := h.submitHandler(callback.User.ID, callback.Channel.ID, callback.Message.Timestamp); err != nil {
+			if err := h.submitHandler(callback.User.ID, callback.Channel.ID, action.Value); err != nil {
 				slog.Error("submitHandler failed", slog.Any("err", err))
 				return
 			}
@@ -195,7 +194,7 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 			if _, _, err := h.client.PostMessage(
 				channelID,
 				slack.MsgOptionTS(t),
-				slack.MsgOptionBlocks(h.personInChargeMessage()...),
+				slack.MsgOptionBlocks(h.personInChargeMessage(t)...),
 			); err != nil {
 				slog.Error("Failed to post person in charge message", slog.Any("err", err))
 			}
@@ -414,7 +413,7 @@ func (h *Handler) postInquiryRichMessage(channelID, userID, priority, content, t
 }
 
 // 担当者を募るメッセージ
-func (h *Handler) personInChargeMessage() []slack.Block {
+func (h *Handler) personInChargeMessage(inqTs string) []slack.Block {
 	return []slack.Block{
 		slack.NewHeaderBlock(
 			slack.NewTextBlockObject("plain_text", "🚨 担当者募集！", false, false),
@@ -429,7 +428,7 @@ func (h *Handler) personInChargeMessage() []slack.Block {
 			"handler_action",
 			slack.NewButtonBlockElement(
 				"handler_button",
-				"handler_button",
+				inqTs,
 				slack.NewTextBlockObject("plain_text", "👋 担当者は私です！", false, false),
 			).WithStyle(slack.StylePrimary),
 		),
@@ -1039,7 +1038,7 @@ func (h *Handler) handleMention(event *myEvent) {
 		if _, _, err := h.client.PostMessage(
 			channelID,
 			slack.MsgOptionTS(timestamp),
-			slack.MsgOptionBlocks(h.personInChargeMessage()...),
+			slack.MsgOptionBlocks(h.personInChargeMessage(timestamp)...),
 		); err != nil {
 			slog.Error("Failed to post person in charge message", slog.Any("err", err))
 		}
@@ -1089,26 +1088,8 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 
 // インシデントハンドラーが応募されたら、保存してハンドラに必要なことを通知する
 func (h *Handler) submitHandler(userID, channelID, ts string) error {
-	params := slack.GetConversationRepliesParameters{
-		ChannelID: channelID,
-		Timestamp: ts,
-	}
-
-	replies, _, _, err := h.client.GetConversationReplies(&params)
-	if err != nil {
-		return fmt.Errorf("GetConversationReplies failed: %w", err)
-	}
-	// repliesの中からbotが投稿したメッセージを取得
-	var botMessage slack.Message
-	for _, reply := range replies {
-		if reply.User == h.getBotUserID() || reply.BotID == h.getBotUserID() {
-			botMessage = reply
-			break
-		}
-	}
-
 	// 問い合わせを検索
-	inquiry, err := h.ds.GetInquiry(h.getBotUserID(), botMessage.Timestamp)
+	inquiry, err := h.ds.GetInquiry(h.getBotUserID(), ts)
 	if err != nil {
 		return fmt.Errorf("GetInquiry failed: %w", err)
 	}
@@ -1119,8 +1100,9 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 		if err := h.ds.SaveInquiry(inquiry); err != nil {
 			return fmt.Errorf("UpdateInquiry failed: %w", err)
 		}
+		slog.Info("Inquiry updated", slog.String("botID", h.getBotUserID()), slog.String("userID", userID), slog.String("channelID", channelID), slog.String("ts", ts))
 	} else {
-		slog.Warn("Inquiry not found", slog.String("botID", h.getBotUserID()), slog.String("timestamp", botMessage.Timestamp), slog.String("userID", userID), slog.String("channelID", channelID), slog.String("ts", ts))
+		slog.Warn("Inquiry not found", slog.String("botID", h.getBotUserID()), slog.String("userID", userID), slog.String("channelID", channelID), slog.String("ts", ts))
 	}
 
 	blocks := []slack.Block{
