@@ -199,7 +199,7 @@ func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
 			"timestamp":  &types.AttributeValueMemberS{Value: inquiry.Timestamp},
 			"channel_id": &types.AttributeValueMemberS{Value: inquiry.ChannelID},
 			"done":       &types.AttributeValueMemberN{Value: strconv.Itoa(done)},
-			"created_at": &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+			"created_at": &types.AttributeValueMemberS{Value: timeNow().Format(time.RFC3339)},
 			"done_at":    &types.AttributeValueMemberS{Value: ""},
 			"message":    &types.AttributeValueMemberS{Value: inquiry.Message},
 		},
@@ -307,7 +307,7 @@ func (d *DynamoDB) UpdateMentionSetting(id string, setting *model.MentionSetting
 		Item: map[string]types.AttributeValue{
 			"bot_id":     &types.AttributeValueMemberS{Value: id},
 			"user_names": &types.AttributeValueMemberS{Value: setting.Usernames},
-			"created_at": &types.AttributeValueMemberS{Value: time.Now().Format(time.RFC3339)},
+			"created_at": &types.AttributeValueMemberS{Value: timeNow().Format(time.RFC3339)},
 		},
 	}
 
@@ -324,7 +324,7 @@ func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
 		return fmt.Errorf("inquiry not found: botID=%s, timestamp=%s", botID, timestamp)
 	}
 	inquiry.Done = done
-	inquiry.DoneAt = time.Now()
+	inquiry.DoneAt = timeNow()
 	return d.SaveInquiry(inquiry)
 }
 

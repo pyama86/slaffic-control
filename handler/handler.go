@@ -484,6 +484,14 @@ func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 	return err
 }
 
+func timeNow() time.Time {
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.UTC
+	}
+	return time.Now().In(loc)
+}
+
 func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName, mention string) error {
 	return h.ds.SaveInquiry(&model.Inquiry{
 		BotID:     h.getBotUserID(),
@@ -493,7 +501,7 @@ func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName, m
 		UserID:    userID,
 		Mention:   mention,
 		UserName:  userName,
-		CreatedAt: time.Now(),
+		CreatedAt: timeNow(),
 	})
 }
 
@@ -593,7 +601,7 @@ func (h *Handler) saveMentionSetting(mentionsRaw, channelID, userName string) er
 	finalCSV := strings.Join(results, ",")
 	if err := h.ds.UpdateMentionSetting(h.getBotUserID(), &model.MentionSetting{
 		Usernames: finalCSV,
-		CreatedAt: time.Now(),
+		CreatedAt: timeNow(),
 	}); err != nil {
 		return fmt.Errorf("Create failed: %w", err)
 	}
@@ -797,6 +805,7 @@ func (h *Handler) StartRotationMonitor() {
 		slog.Error("Invalid ROTATION_DAY", slog.Any("day", dayStr))
 		return
 	}
+
 	loc, err := time.LoadLocation("Asia/Tokyo") // 日本時間
 	if err != nil {
 		slog.Error("Failed to load location", slog.Any("err", err))
@@ -806,7 +815,7 @@ func (h *Handler) StartRotationMonitor() {
 
 	go func() {
 		for {
-			now := time.Now().In(loc)
+			now := timeNow()
 			nextRotation := time.Date(now.Year(), now.Month(), now.Day(), 9, 0, 0, 0, loc)
 
 			// すでに9時を過ぎていたら翌日
@@ -820,7 +829,7 @@ func (h *Handler) StartRotationMonitor() {
 			time.Sleep(sleepDuration)
 
 			// 今日が指定された曜日ならローテーションを実行
-			now = time.Now().In(loc) // スリープ後に再取得
+			now = timeNow() // スリープ後に再取得
 			if int(now.Weekday()) == desiredDay {
 				slog.Info("Rotation time has come, start rotation")
 				h.rotateMentions()
