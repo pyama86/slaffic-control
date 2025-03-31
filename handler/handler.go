@@ -740,6 +740,10 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 			postedBy = i.UserName // メンションを飛ばさないため、単純な文字列
 		}
 
+		if !strings.Contains(i.Mention, "<@") {
+			i.Mention = "<@" + i.Mention + ">"
+		}
+
 		blocks = append(blocks, slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn", "📅 *問い合わせ日時:* "+t, false, false),
 			[]*slack.TextBlockObject{
