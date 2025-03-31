@@ -1,6 +1,10 @@
 package infra
 
-import "github.com/pyama86/slaffic-control/domain/model"
+import (
+	"time"
+
+	"github.com/pyama86/slaffic-control/domain/model"
+)
 
 type Datastore interface {
 	// 問い合わせを保存する
@@ -16,4 +20,12 @@ type Datastore interface {
 	GetMentionSetting(string) (*model.MentionSetting, error)
 	// メンション設定を更新する
 	UpdateMentionSetting(string, *model.MentionSetting) error
+}
+
+func timeNow() time.Time {
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.UTC
+	}
+	return time.Now().In(loc)
 }
