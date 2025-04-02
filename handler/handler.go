@@ -1003,6 +1003,44 @@ func (h *Handler) handleMention(event *myEvent) {
 		return
 	}
 
+	if threadTs != "" {
+		mentionTS, err := h.firstMentionIn(
+			channelID,
+			event.ThreadTimeStamp,
+			h.getBotUserID(),
+		)
+
+		if err != nil {
+			slog.Error("firstMentionIn failed", slog.Any("err", err))
+			return
+		}
+
+		if mentionTS != "" {
+			setting, err := h.ds.GetMentionSetting(h.getBotUserID())
+			if err != nil {
+				return
+			}
+			mention, err := setting.GetCurrentMention()
+			if err != nil {
+				return
+			}
+			// 同じメンションで催促するだけ
+			_, _, err = h.client.PostMessage(
+				channelID,
+				slack.MsgOptionText(
+					fmt.Sprintf("%s さん、回答をお待ちしています。", mention),
+					false,
+				),
+				slack.MsgOptionTS(event.ThreadTimeStamp),
+			)
+			if err != nil {
+				slog.Error("Failed to post message", slog.Any("err", err))
+			}
+
+			return
+		}
+	}
+
 	// もしメンションにテキストが含まれていれば、問い合わせとして処理
 	if messageText != "" && !strings.HasPrefix(event.Channel, "D") {
 
@@ -1135,4 +1173,28 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 	}
 
 	return nil
+}
+
+func (h *Handler) firstMentionIn(channelID, threadTs, mention string) (string, error) {
+	history, err := h.client.GetConversationHistory(&slack.GetConversationHistoryParameters{
+		ChannelID: channelID,
+		Inclusive: true,
+		Latest:    threadTs,
+		Limit:     1,
+		Oldest:    threadTs,
+	})
+
+	if err != nil {
+		return "", fmt.Errorf("GetConversationHistory failed: %w", err)
+	}
+	if len(history.Messages) == 0 {
+		return "", fmt.Errorf("No messages found in thread")
+	}
+
+	for _, msg := range history.Messages {
+		if strings.Contains(msg.User, mention) || strings.Contains(msg.BotID, mention) {
+			return msg.Timestamp, nil
+		}
+	}
+	return "", nil
 }
