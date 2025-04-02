@@ -333,6 +333,13 @@ func TestHandler_handleMention(t *testing.T) {
 			resp := `{"ok":true,"ts":"1234.5678"}`
 			_, _ = w.Write([]byte(resp))
 		}))
+		// /chat.conversations.history エンドポイント: 履歴取得をキャプチャ
+		c.Handle("/conversations.history", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			w.Header().Set("Content-Type", "application/json")
+			resp := `{"ok":true,"messages":[{"ts":"1234.5678","text":"test message"}]}`
+			_, _ = w.Write([]byte(resp))
+		}))
 		// /chat.postEphemeral エンドポイント: エフェメラルメッセージ投稿をキャプチャ
 		c.Handle("/chat.postEphemeral", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_ = r.ParseForm()
