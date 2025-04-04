@@ -19,6 +19,11 @@ import (
 
 var defaultChannel = os.Getenv("DEFAULT_CHANNEL")
 
+const (
+	cmdHistory = "history"
+	cmdSummary = "summary"
+)
+
 type Handler struct {
 	client        infra.SlackAPI
 	userCache     *ttlcache.Cache[string, []slack.User]
@@ -111,17 +116,20 @@ func getUserPreferredName(user *slack.User) string {
 }
 
 func (h *Handler) saveInquiryAndNotify(channelID, userID, priority, inputValue, ts, threadTS string) error {
-	mention, err := h.getMention()
+	mention, err := h.getMentionLink()
 	if err != nil {
 		return fmt.Errorf("getMention failed: %w", err)
 	}
-
+	mentionID, err := h.getMentionID()
+	if err != nil {
+		return fmt.Errorf("getMentionID failed: %w", err)
+	}
 	t, err := h.postInquiryRichMessage(channelID, userID, priority, inputValue, threadTS, mention)
 	if err != nil {
 		return fmt.Errorf("postInquiryRichMessage failed: %w", err)
 	}
 
-	if err := h.saveInquiry(inputValue, t, channelID, userID, mention, threadTS); err != nil {
+	if err := h.saveInquiry(inputValue, t, channelID, userID, mentionID, threadTS); err != nil {
 		return fmt.Errorf("saveInquiry failed: %w", err)
 	}
 
@@ -351,20 +359,34 @@ func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	return err
 }
 
-func (h *Handler) getMention() (string, error) {
+func (h *Handler) getMention(isLink bool) (string, error) {
 	setting, err := h.ds.GetMentionSetting(h.getBotUserID())
 	if err != nil {
 		return "", err
 	}
 	mention := "未設定"
 	if setting.BotID != "" && setting.Usernames != "" {
-		mention, err = setting.GetCurrentMention()
+		if isLink {
+			mention, err = setting.GetCurrentMention()
+		} else {
+			mention, err = setting.GetCurrentMentionID()
+		}
 		if err != nil {
 			return "", err
 		}
 	}
 	return mention, nil
+
 }
+
+func (h *Handler) getMentionLink() (string, error) {
+	return h.getMention(true)
+}
+
+func (h *Handler) getMentionID() (string, error) {
+	return h.getMention(false)
+}
+
 func (h *Handler) postInquiryRichMessage(channelID, userID, priority, content, threadTs, mention string) (string, error) {
 	blocks := []slack.Block{
 		// ヘッダー
@@ -767,15 +789,37 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 			slog.Error("GetUserInfo failed", slog.Any("err", err))
 		}
 
-		if !strings.Contains(i.Mention, "<@") {
-			i.Mention = "<@" + i.Mention + ">"
+		// 担当者
+		// メンションの取得
+
+		personInChage := i.Mention
+		userID := ""
+		if strings.HasPrefix(i.Mention, "S") || strings.HasPrefix(i.Mention, "G") {
+			userID = i.Mention
+		} else if strings.HasPrefix(i.Mention, "<@") {
+			// ユーザーIDから名前を取得
+			if strings.TrimPrefix(i.Mention, "<!subteam^") == "" {
+				// ユーザーグループのメンション
+				userID := strings.TrimPrefix(i.Mention, "<!subteam^")
+				userID = strings.TrimSuffix(userID, ">")
+			} else if strings.HasPrefix(i.Mention, "<@") {
+				userID = strings.TrimPrefix(i.Mention, "<@")
+				userID = strings.TrimSuffix(userID, ">")
+			}
+		}
+		if userID != "" {
+			pc, err := h.getUserInfo(userID)
+			if err != nil {
+				slog.Error("GetUserInfo failed", slog.Any("err", err))
+			}
+			personInChage = getUserPreferredName(pc)
 		}
 
 		blocks = append(blocks, slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn", "📅 *問い合わせ日時:* "+t, false, false),
 			[]*slack.TextBlockObject{
 				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*投稿者:* %s", postedBy), false, false),
-				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*担当者:* %s", i.Mention), false, false),
+				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*担当者:* %s", personInChage), false, false),
 				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*詳細:* <%s|詳細を見る>", slackURL), false, false),
 			},
 			nil,
@@ -1017,7 +1061,8 @@ func (h *Handler) handleMention(event *myEvent) {
 	if event.ThreadTimeStamp != "" {
 		threadTs = event.ThreadTimeStamp
 	}
-	if messageText == "history" {
+
+	if messageText == cmdHistory {
 		if err := h.showInquiries(channelID, userID); err != nil {
 			slog.Error("showInquiries failed", slog.Any("err", err))
 		}
