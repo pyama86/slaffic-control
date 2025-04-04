@@ -160,7 +160,7 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				return
 			}
 		case "history_action":
-			if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
+			if err := h.showInquiries(callback.Channel.ID, callback.User.ID, callback.ActionCallback.BlockActions[0].Value); err != nil {
 				slog.Error("showInquiries failed", slog.Any("err", err))
 				return
 			}
@@ -174,14 +174,6 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				slog.Error("submitHandler failed", slog.Any("err", err))
 				return
 			}
-			if _, _, err := h.client.DeleteMessage(
-				callback.Channel.ID,
-				callback.Message.Timestamp,
-			); err != nil {
-				slog.Error("Failed to delete message", slog.Any("err", err))
-				return
-			}
-
 		}
 
 	case slack.InteractionTypeViewSubmission:
@@ -260,11 +252,11 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 			}
 		case *slackevents.AppMentionEvent:
 			h.handleMention(&myEvent{
-				Channel:         ev.Channel,
-				User:            ev.User,
-				Text:            ev.Text,
-				ThreadTimeStamp: ev.ThreadTimeStamp,
-				TimeStamp:       ev.TimeStamp,
+				Channel:   ev.Channel,
+				User:      ev.User,
+				Text:      ev.Text,
+				ThreadTS:  ev.ThreadTimeStamp,
+				TimeStamp: ev.TimeStamp,
 			})
 		case *slackevents.ReactionAddedEvent:
 			if ev.Reaction == "white_check_mark" {
@@ -744,7 +736,7 @@ func findGroupHandleByID(gid string, groups []slack.UserGroup) string {
 	return ""
 }
 
-func (h *Handler) showInquiries(channelID, userID string) error {
+func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 	inquiries, err := h.ds.GetLatestInquiries(h.getBotUserID())
 	if err != nil {
 		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
@@ -784,7 +776,7 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 		postedBy := "不明"
 		user, err := h.getUserInfo(i.UserID)
 		if err == nil {
-			postedBy = user.Name
+			postedBy = getUserPreferredName(user)
 		} else {
 			slog.Error("GetUserInfo failed", slog.Any("err", err))
 		}
@@ -793,7 +785,7 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 		// メンションの取得
 
 		personInChage := i.Mention
-		userID := ""
+		userID := i.Mention
 		if strings.HasPrefix(i.Mention, "S") || strings.HasPrefix(i.Mention, "G") {
 			userID = i.Mention
 		} else if strings.HasPrefix(i.Mention, "<@") {
@@ -841,7 +833,11 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 			false, false),
 	))
 
-	_, err = h.client.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...))
+	_, _, err = h.client.PostMessage(
+		channelID,
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionTS(threadTS),
+	)
 	return err
 }
 
@@ -1040,11 +1036,11 @@ func (h *Handler) handleReaction(done bool, timestamp string) {
 }
 
 type myEvent struct {
-	Channel         string `json:"channel"`
-	Text            string `json:"text"`
-	User            string `json:"user"`
-	TimeStamp       string `json:"ts"`
-	ThreadTimeStamp string `json:"thread_ts"`
+	Channel   string `json:"channel"`
+	Text      string `json:"text"`
+	User      string `json:"user"`
+	TimeStamp string `json:"ts"`
+	ThreadTS  string `json:"thread_ts"`
 }
 
 // メンションを受け取ったときの処理
@@ -1058,12 +1054,15 @@ func (h *Handler) handleMention(event *myEvent) {
 	// 問い合わせをリッチメッセージで投稿
 	// スレッドでメンションされたか？
 	var threadTs string
-	if event.ThreadTimeStamp != "" {
-		threadTs = event.ThreadTimeStamp
+	if event.ThreadTS != "" {
+		threadTs = event.ThreadTS
 	}
-
+	ts := event.TimeStamp
+	if event.ThreadTS != "" {
+		ts = event.ThreadTS
+	}
 	if messageText == cmdHistory {
-		if err := h.showInquiries(channelID, userID); err != nil {
+		if err := h.showInquiries(channelID, userID, ts); err != nil {
 			slog.Error("showInquiries failed", slog.Any("err", err))
 		}
 		return
@@ -1072,7 +1071,7 @@ func (h *Handler) handleMention(event *myEvent) {
 	if threadTs != "" {
 		mentionTS, err := h.firstMentionIn(
 			channelID,
-			event.ThreadTimeStamp,
+			event.ThreadTS,
 			h.getBotUserID(),
 		)
 
@@ -1097,7 +1096,7 @@ func (h *Handler) handleMention(event *myEvent) {
 					fmt.Sprintf("%s さん、回答をお待ちしています。", mention),
 					false,
 				),
-				slack.MsgOptionTS(event.ThreadTimeStamp),
+				slack.MsgOptionTS(event.ThreadTS),
 			)
 			if err != nil {
 				slog.Error("Failed to post message", slog.Any("err", err))
@@ -1120,10 +1119,11 @@ func (h *Handler) handleMention(event *myEvent) {
 	}
 
 	// ここまで来たら、通常のメニューを表示
+
 	blocks := []slack.Block{
-		newSectionBlock("section-1", "*メニューを選択してください*", "inquiry_action", "問い合わせを行う"),
-		newSectionBlock("section-2", "*問い合わせの履歴を見る*", "history_action", "履歴を見る"),
-		newSectionBlock("section-3", "*メンションの設定を行う*", "mention_action", "設定する"),
+		newSectionBlock("inq", "*メニューを選択してください*", "inquiry_action", "問い合わせを行う", ts),
+		newSectionBlock("hist", "*問い合わせの履歴を見る*", "history_action", "履歴を見る", ts),
+		newSectionBlock("mention", "*メンションの設定を行う*", "mention_action", "設定する", ts),
 	}
 
 	_, err := h.client.PostEphemeral(
@@ -1137,7 +1137,7 @@ func (h *Handler) handleMention(event *myEvent) {
 	}
 }
 
-func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionBlock {
+func newSectionBlock(blockID, text, actionID, buttonText, value string) *slack.SectionBlock {
 	return &slack.SectionBlock{
 		Type:    slack.MBTSection,
 		BlockID: blockID,
@@ -1149,7 +1149,7 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 			ButtonElement: &slack.ButtonBlockElement{
 				Type:     slack.METButton,
 				ActionID: actionID,
-				Value:    "dummy_value",
+				Value:    value,
 				Text: &slack.TextBlockObject{
 					Type: "plain_text",
 					Text: buttonText,
