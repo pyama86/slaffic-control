@@ -99,6 +99,43 @@ func (h *Handler) Handle() error {
 
 	return socketMode.Run()
 }
+
+func getUserPreferredName(user *slack.User) string {
+	if user.Profile.DisplayName != "" {
+		return user.Profile.DisplayName
+	}
+	if user.RealName != "" {
+		return user.RealName
+	}
+	return user.Name
+}
+
+func (h *Handler) saveInquiryAndNotify(channelID, userID, priority, inputValue, ts, threadTS string) error {
+	mention, err := h.getMention()
+	if err != nil {
+		return fmt.Errorf("getMention failed: %w", err)
+	}
+
+	t, err := h.postInquiryRichMessage(channelID, userID, priority, inputValue, threadTS, mention)
+	if err != nil {
+		return fmt.Errorf("postInquiryRichMessage failed: %w", err)
+	}
+
+	if err := h.saveInquiry(inputValue, t, channelID, userID, mention, threadTS); err != nil {
+		return fmt.Errorf("saveInquiry failed: %w", err)
+	}
+
+	// ハンドラを募集する
+	if _, _, err := h.client.PostMessage(
+		channelID,
+		slack.MsgOptionTS(t),
+		slack.MsgOptionBlocks(h.personInChargeMessage(t)...),
+	); err != nil {
+		return fmt.Errorf("failed to post person in charge message: %w", err)
+	}
+	return nil
+
+}
 func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 	switch callback.Type {
 	case slack.InteractionTypeBlockActions:
@@ -147,10 +184,7 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 		}
 
 		// 投稿者の名前（表示名があれば優先）
-		userName := user.Profile.DisplayName
-		if userName == "" {
-			userName = user.RealName
-		}
+		author := getUserPreferredName(user)
 
 		switch callback.View.CallbackID {
 		case "inquiry_modal":
@@ -173,37 +207,17 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				}
 				return
 			}
-			mention, err := h.getMention()
+
+			err := h.saveInquiryAndNotify(channelID, callback.User.ID, priority, inputValue, callback.MessageTs, "")
 			if err != nil {
-				slog.Error("getMention failed", slog.Any("err", err))
+				slog.Error("saveInquiryAndNotify failed", slog.Any("err", err))
 				return
 			}
-
-			t, err := h.postInquiryRichMessage(channelID, callback.User.ID, priority, inputValue, "", mention)
-			if err != nil {
-				slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
-				return
-			}
-
-			if err := h.saveInquiry(inputValue, t, channelID, callback.User.ID, userName, mention); err != nil {
-				slog.Error("saveInquiry failed", slog.Any("err", err))
-				return
-			}
-
-			// ハンドラを募集する
-			if _, _, err := h.client.PostMessage(
-				channelID,
-				slack.MsgOptionTS(t),
-				slack.MsgOptionBlocks(h.personInChargeMessage(t)...),
-			); err != nil {
-				slog.Error("Failed to post person in charge message", slog.Any("err", err))
-			}
-
 		case "mention_setting_modal":
 			// メンションの保存
 			mentionsRaw := callback.View.State.Values["mention_block"]["mention_text"].Value
 			channelID := callback.View.PrivateMetadata
-			err := h.saveMentionSetting(mentionsRaw, channelID, userName)
+			err := h.saveMentionSetting(mentionsRaw, channelID, author)
 			if err != nil {
 				slog.Error("saveMentionSetting failed", slog.Any("err", err))
 				if _, err := h.client.PostEphemeral(
@@ -242,6 +256,7 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 				User:            ev.User,
 				Text:            ev.Text,
 				ThreadTimeStamp: ev.ThreadTimeStamp,
+				TimeStamp:       ev.TimeStamp,
 			})
 		case *slackevents.ReactionAddedEvent:
 			if ev.Reaction == "white_check_mark" {
@@ -491,15 +506,15 @@ func timeNow() time.Time {
 	return time.Now().In(loc)
 }
 
-func (h *Handler) saveInquiry(message, timestamp, channelID, userID, userName, mention string) error {
+func (h *Handler) saveInquiry(message, timestamp, channelID, userID, mention, threadTS string) error {
 	return h.ds.SaveInquiry(&model.Inquiry{
 		BotID:     h.getBotUserID(),
 		Message:   message,
 		Timestamp: timestamp,
+		ThreadTS:  threadTS,
 		ChannelID: channelID,
 		UserID:    userID,
 		Mention:   mention,
-		UserName:  userName,
 		CreatedAt: timeNow(),
 	})
 }
@@ -739,12 +754,17 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 		t := i.CreatedAt.Format("2006-01-02 15:04:05")
 
 		// SlackメッセージURLの生成
-		slackURL := fmt.Sprintf("%s/archives/%s/p%s", workspaceURL, i.ChannelID, i.Timestamp)
-
+		slackURL := fmt.Sprintf("%s/archives/%s/p%s", workspaceURL, i.ChannelID, strings.ReplaceAll(i.Timestamp, ".", ""))
+		if i.ThreadTS != "" {
+			slackURL += fmt.Sprintf("?thread_ts=%s&cid=%s", i.ThreadTS, i.ChannelID)
+		}
 		// 投稿者名の取得（メンションが飛ばないように）
 		postedBy := "不明"
-		if i.UserName != "" {
-			postedBy = i.UserName // メンションを飛ばさないため、単純な文字列
+		user, err := h.getUserInfo(i.UserID)
+		if err == nil {
+			postedBy = user.Name
+		} else {
+			slog.Error("GetUserInfo failed", slog.Any("err", err))
 		}
 
 		if !strings.Contains(i.Mention, "<@") {
@@ -979,6 +999,7 @@ type myEvent struct {
 	Channel         string `json:"channel"`
 	Text            string `json:"text"`
 	User            string `json:"user"`
+	TimeStamp       string `json:"ts"`
 	ThreadTimeStamp string `json:"thread_ts"`
 }
 
@@ -1043,46 +1064,11 @@ func (h *Handler) handleMention(event *myEvent) {
 
 	// もしメンションにテキストが含まれていれば、問い合わせとして処理
 	if messageText != "" && !strings.HasPrefix(event.Channel, "D") {
-
 		priority := "未設定"
-
-		// Slack API から投稿者の情報を取得
-		user, err := h.getUserInfo(userID)
+		err := h.saveInquiryAndNotify(channelID, userID, priority, messageText, event.TimeStamp, threadTs)
 		if err != nil {
-			slog.Error("GetUserInfo failed", slog.Any("err", err))
+			slog.Error("saveInquiryAndNotify failed", slog.Any("err", err))
 			return
-		}
-
-		// 投稿者の名前（表示名があれば優先）
-		userName := user.Profile.DisplayName
-		if userName == "" {
-			userName = user.RealName
-		}
-
-		mention, err := h.getMention()
-		if err != nil {
-			slog.Error("getMention failed", slog.Any("err", err))
-			return
-		}
-		timestamp, err := h.postInquiryRichMessage(channelID, userID, priority, messageText, threadTs, mention)
-		if err != nil {
-			slog.Error("postInquiryRichMessage failed", slog.Any("err", err))
-			return
-		}
-
-		// 投稿者の情報も含めて問い合わせを保存
-		if err := h.saveInquiry(messageText, timestamp, channelID, userID, userName, mention); err != nil {
-			slog.Error("saveInquiry failed", slog.Any("err", err))
-			return
-		}
-
-		// ハンドラを募集する
-		if _, _, err := h.client.PostMessage(
-			channelID,
-			slack.MsgOptionTS(timestamp),
-			slack.MsgOptionBlocks(h.personInChargeMessage(timestamp)...),
-		); err != nil {
-			slog.Error("Failed to post person in charge message", slog.Any("err", err))
 		}
 
 		return

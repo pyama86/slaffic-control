@@ -194,9 +194,9 @@ func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
 		Item: map[string]types.AttributeValue{
 			"bot_id":     &types.AttributeValueMemberS{Value: inquiry.BotID},
 			"user_id":    &types.AttributeValueMemberS{Value: inquiry.UserID},
-			"user_name":  &types.AttributeValueMemberS{Value: inquiry.UserName},
 			"mention":    &types.AttributeValueMemberS{Value: inquiry.Mention},
 			"timestamp":  &types.AttributeValueMemberS{Value: inquiry.Timestamp},
+			"thread_ts":  &types.AttributeValueMemberS{Value: inquiry.ThreadTS},
 			"channel_id": &types.AttributeValueMemberS{Value: inquiry.ChannelID},
 			"done":       &types.AttributeValueMemberN{Value: strconv.Itoa(done)},
 			"created_at": &types.AttributeValueMemberS{Value: timeNow().Format(time.RFC3339)},
@@ -245,8 +245,8 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 		}
 		inquiry := model.Inquiry{
 			Timestamp: getStringValue(item, "timestamp"),
+			ThreadTS:  getStringValue(item, "thread_ts"),
 			UserID:    getStringValue(item, "user_id"),
-			UserName:  getStringValue(item, "user_name"),
 			Mention:   getStringValue(item, "mention"),
 			Message:   getStringValue(item, "message"),
 			ChannelID: getStringValue(item, "channel_id"),
@@ -374,8 +374,8 @@ func (d *DynamoDB) GetInquiry(botID, ts string) (*model.Inquiry, error) {
 		Message:   getStringValue(result.Item, "message"),
 		ChannelID: getStringValue(result.Item, "channel_id"),
 		Timestamp: getStringValue(result.Item, "timestamp"),
+		ThreadTS:  getStringValue(result.Item, "thread_ts"),
 		UserID:    getStringValue(result.Item, "user_id"),
-		UserName:  getStringValue(result.Item, "user_name"),
 		Mention:   getStringValue(result.Item, "mention"),
 		CreatedAt: createdAt,
 		DoneAt:    doneAt,

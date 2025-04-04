@@ -45,7 +45,6 @@ func TestHandler_saveInquiry(t *testing.T) {
 	assert.Equal(t, message, inquiry.Message)
 	assert.Equal(t, timestamp, inquiry.Timestamp)
 	assert.Equal(t, userID, inquiry.UserID)
-	assert.Equal(t, userName, inquiry.UserName)
 }
 
 func TestHandler_saveMentionSetting(t *testing.T) {
@@ -135,9 +134,9 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 			BotID:     botID,
 			Message:   fmt.Sprintf("message #%d", i),
 			Timestamp: fmt.Sprintf("99999999%d.000000", i),
+			ThreadTS:  fmt.Sprintf("99999999%d.000000", i),
 			ChannelID: "test-channel",
 			UserID:    "test-user",
-			UserName:  "Tester",
 			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
 		})
 	}
@@ -247,9 +246,9 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 			BotID:     botID,
 			Message:   fmt.Sprintf("message #%d", i),
 			Timestamp: fmt.Sprintf("99999999%d.000000", i),
+			ThreadTS:  fmt.Sprintf("99999999%d.000000", i),
 			ChannelID: "test-channel",
 			UserID:    "test-user",
-			UserName:  "Tester",
 			CreatedAt: time.Now().Add(time.Duration(i) * time.Minute),
 		})
 	}
