@@ -76,7 +76,7 @@ func TestHandler_saveMentionSetting(t *testing.T) {
 }
 
 func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
-	var postEphemeralRequests []map[string]interface{}
+	var postMessageRequests []map[string]interface{}
 	botID := randomString(10)
 	server := slacktest.NewTestServer(func(c slacktest.Customize) {
 		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +87,7 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 			}
 		}))
 
-		c.Handle("/chat.postEphemeral", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.Handle("/chat.postMessage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// まずは parse する
 			if err := r.ParseForm(); err != nil {
 				t.Errorf("failed to parse form: %v", err)
@@ -106,7 +106,7 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 				"user":    user,
 				"blocks":  blocks,
 			}
-			postEphemeralRequests = append(postEphemeralRequests, data)
+			postMessageRequests = append(postMessageRequests, data)
 
 			w.Header().Set("Content-Type", "application/json")
 			_, err := w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
@@ -141,14 +141,13 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 		})
 	}
 
-	err = h.showInquiries("test-channel", "test-user")
+	err = h.showInquiries("test-channel", "test-user", "dummy-ts")
 	assert.NoError(t, err, "showInquiries should not fail")
 
-	assert.Len(t, postEphemeralRequests, 1, "Ephemeralメッセージは1回のみ呼ばれるはず")
+	assert.Len(t, postMessageRequests, 1, "Messageメッセージは1回のみ呼ばれるはず")
 
-	req := postEphemeralRequests[0]
+	req := postMessageRequests[0]
 	assert.Equal(t, "test-channel", req["channel"])
-	assert.Equal(t, "test-user", req["user"])
 
 	blocks, ok := req["blocks"].([]map[string]interface{})
 	if !ok {
@@ -186,7 +185,7 @@ func randomString(n int) string {
 	return string(b)
 }
 func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
-	var postEphemeralRequests []map[string]interface{}
+	var postMessageRequests []map[string]interface{}
 	botID := randomString(10)
 
 	server := slacktest.NewTestServer(func(c slacktest.Customize) {
@@ -199,7 +198,7 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 
 		}))
 
-		c.Handle("/chat.postEphemeral", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c.Handle("/chat.postMessage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// まずは parse する
 			if err := r.ParseForm(); err != nil {
 				t.Errorf("failed to parse form: %v", err)
@@ -218,7 +217,7 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 				"user":    user,
 				"blocks":  blocks,
 			}
-			postEphemeralRequests = append(postEphemeralRequests, data)
+			postMessageRequests = append(postMessageRequests, data)
 
 			w.Header().Set("Content-Type", "application/json")
 			_, err := w.Write([]byte(`{"ok": true, "message_ts": "1234567890.123456"}`))
@@ -260,14 +259,13 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 		assert.NoError(t, err, "UpdateInquiryDone should not fail")
 	}
 
-	err = h.showInquiries("test-channel", "test-user")
+	err = h.showInquiries("test-channel", "test-user", "dummy-ts")
 	assert.NoError(t, err, "showInquiries should not fail")
 
-	assert.Len(t, postEphemeralRequests, 1, "Ephemeralメッセージは1回のみ呼ばれるはず")
+	assert.Len(t, postMessageRequests, 1, "Messageメッセージは1回のみ呼ばれるはず")
 
-	req := postEphemeralRequests[0]
+	req := postMessageRequests[0]
 	assert.Equal(t, "test-channel", req["channel"])
-	assert.Equal(t, "test-user", req["user"])
 
 	blocks, ok := req["blocks"].([]map[string]interface{})
 	if !ok {
