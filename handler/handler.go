@@ -19,8 +19,14 @@ import (
 
 var defaultChannel = os.Getenv("DEFAULT_CHANNEL")
 
+const (
+	cmdHistory = "history"
+	cmdSummary = "summary"
+)
+
 type Handler struct {
 	client        infra.SlackAPI
+	openapi       *infra.OpenAI
 	userCache     *ttlcache.Cache[string, []slack.User]
 	groupCache    *ttlcache.Cache[string, []slack.UserGroup]
 	userInfoCache *ttlcache.Cache[string, *slack.User]
@@ -54,6 +60,11 @@ func NewHandler() (*Handler, error) {
 	go h.userCache.Start()
 	go h.groupCache.Start()
 	go h.userInfoCache.Start()
+	oa, err := infra.NewOpenAI()
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize OpenAI client: %w", err)
+	}
+	h.openapi = oa
 	return h, nil
 }
 
@@ -111,17 +122,20 @@ func getUserPreferredName(user *slack.User) string {
 }
 
 func (h *Handler) saveInquiryAndNotify(channelID, userID, priority, inputValue, ts, threadTS string) error {
-	mention, err := h.getMention()
+	mention, err := h.getMentionLink()
 	if err != nil {
 		return fmt.Errorf("getMention failed: %w", err)
 	}
-
+	mentionID, err := h.getMentionID()
+	if err != nil {
+		return fmt.Errorf("getMentionID failed: %w", err)
+	}
 	t, err := h.postInquiryRichMessage(channelID, userID, priority, inputValue, threadTS, mention)
 	if err != nil {
 		return fmt.Errorf("postInquiryRichMessage failed: %w", err)
 	}
 
-	if err := h.saveInquiry(inputValue, t, channelID, userID, mention, threadTS); err != nil {
+	if err := h.saveInquiry(inputValue, t, channelID, userID, mentionID, threadTS); err != nil {
 		return fmt.Errorf("saveInquiry failed: %w", err)
 	}
 
@@ -152,7 +166,7 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				return
 			}
 		case "history_action":
-			if err := h.showInquiries(callback.Channel.ID, callback.User.ID); err != nil {
+			if err := h.showInquiries(callback.Channel.ID, callback.User.ID, callback.ActionCallback.BlockActions[0].Value); err != nil {
 				slog.Error("showInquiries failed", slog.Any("err", err))
 				return
 			}
@@ -166,14 +180,6 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 				slog.Error("submitHandler failed", slog.Any("err", err))
 				return
 			}
-			if _, _, err := h.client.DeleteMessage(
-				callback.Channel.ID,
-				callback.Message.Timestamp,
-			); err != nil {
-				slog.Error("Failed to delete message", slog.Any("err", err))
-				return
-			}
-
 		}
 
 	case slack.InteractionTypeViewSubmission:
@@ -252,11 +258,11 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 			}
 		case *slackevents.AppMentionEvent:
 			h.handleMention(&myEvent{
-				Channel:         ev.Channel,
-				User:            ev.User,
-				Text:            ev.Text,
-				ThreadTimeStamp: ev.ThreadTimeStamp,
-				TimeStamp:       ev.TimeStamp,
+				Channel:   ev.Channel,
+				User:      ev.User,
+				Text:      ev.Text,
+				ThreadTS:  ev.ThreadTimeStamp,
+				TimeStamp: ev.TimeStamp,
 			})
 		case *slackevents.ReactionAddedEvent:
 			if ev.Reaction == "white_check_mark" {
@@ -351,21 +357,35 @@ func (h *Handler) openInquiryModal(triggerID, channelID string) error {
 	return err
 }
 
-func (h *Handler) getMention() (string, error) {
+func (h *Handler) getMention(isLink bool) (string, error) {
 	setting, err := h.ds.GetMentionSetting(h.getBotUserID())
 	if err != nil {
 		return "", err
 	}
 	mention := "未設定"
 	if setting.BotID != "" && setting.Usernames != "" {
-		mention, err = setting.GetCurrentMention()
+		if isLink {
+			mention, err = setting.GetCurrentMention()
+		} else {
+			mention, err = setting.GetCurrentMentionID()
+		}
 		if err != nil {
 			return "", err
 		}
 	}
 	return mention, nil
+
 }
-func (h *Handler) postInquiryRichMessage(channelID, userID, priority, content, threadTs, mention string) (string, error) {
+
+func (h *Handler) getMentionLink() (string, error) {
+	return h.getMention(true)
+}
+
+func (h *Handler) getMentionID() (string, error) {
+	return h.getMention(false)
+}
+
+func (h *Handler) postInquiryRichMessage(channelID, userID, priority, content, threadTs, assingnee string) (string, error) {
 	blocks := []slack.Block{
 		// ヘッダー
 		slack.NewHeaderBlock(
@@ -380,7 +400,7 @@ func (h *Handler) postInquiryRichMessage(channelID, userID, priority, content, t
 		slack.NewDividerBlock(),
 		// 担当者情報
 		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*🔔 担当者:* %s", mention), false, false),
+			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*🔔 担当者:* %s", assingnee), false, false),
 			nil, nil,
 		),
 		slack.NewDividerBlock(),
@@ -506,16 +526,17 @@ func timeNow() time.Time {
 	return time.Now().In(loc)
 }
 
-func (h *Handler) saveInquiry(message, timestamp, channelID, userID, mention, threadTS string) error {
+func (h *Handler) saveInquiry(message, timestamp, channelID, userID, assingneeID, threadTS string) error {
 	return h.ds.SaveInquiry(&model.Inquiry{
-		BotID:     h.getBotUserID(),
-		Message:   message,
-		Timestamp: timestamp,
-		ThreadTS:  threadTS,
-		ChannelID: channelID,
-		UserID:    userID,
-		Mention:   mention,
-		CreatedAt: timeNow(),
+		BotID:       h.getBotUserID(),
+		Message:     message,
+		Timestamp:   timestamp,
+		ThreadTS:    threadTS,
+		ChannelID:   channelID,
+		UserID:      userID,
+		Mention:     assingneeID,
+		AssingneeID: assingneeID,
+		CreatedAt:   timeNow(),
 	})
 }
 
@@ -722,7 +743,7 @@ func findGroupHandleByID(gid string, groups []slack.UserGroup) string {
 	return ""
 }
 
-func (h *Handler) showInquiries(channelID, userID string) error {
+func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 	inquiries, err := h.ds.GetLatestInquiries(h.getBotUserID())
 	if err != nil {
 		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
@@ -762,20 +783,46 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 		postedBy := "不明"
 		user, err := h.getUserInfo(i.UserID)
 		if err == nil {
-			postedBy = user.Name
+			postedBy = getUserPreferredName(user)
 		} else {
-			slog.Error("GetUserInfo failed", slog.Any("err", err))
+			slog.Error("GetUserInfo failed %s %s", slog.Any("err", err), slog.Any("userID", i.UserID))
 		}
 
-		if !strings.Contains(i.Mention, "<@") {
-			i.Mention = "<@" + i.Mention + ">"
+		// 担当者
+		// メンションの取得
+		assingneeID := i.AssingneeID
+		if assingneeID == "" {
+			assingneeID = i.Mention
+		}
+		personInChage := assingneeID
+		userID := assingneeID
+
+		if strings.HasPrefix(assingneeID, "S") || strings.HasPrefix(assingneeID, "G") {
+			userID = assingneeID
+		} else if strings.HasPrefix(assingneeID, "<@") {
+			// ユーザーIDから名前を取得
+			if strings.TrimPrefix(assingneeID, "<!subteam^") == "" {
+				// ユーザーグループのメンション
+				userID = strings.TrimPrefix(assingneeID, "<!subteam^")
+				userID = strings.TrimSuffix(userID, ">")
+			} else if strings.HasPrefix(assingneeID, "<@") {
+				userID = strings.TrimPrefix(assingneeID, "<@")
+				userID = strings.TrimSuffix(userID, ">")
+			}
+		}
+		if userID != "" {
+			pc, err := h.getUserInfo(userID)
+			if err != nil {
+				slog.Error("GetUserInfo failed", slog.Any("err", err), slog.Any("userID", userID))
+			}
+			personInChage = getUserPreferredName(pc)
 		}
 
 		blocks = append(blocks, slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn", "📅 *問い合わせ日時:* "+t, false, false),
 			[]*slack.TextBlockObject{
 				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*投稿者:* %s", postedBy), false, false),
-				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*担当者:* %s", i.Mention), false, false),
+				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*担当者:* %s", personInChage), false, false),
 				slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*詳細:* <%s|詳細を見る>", slackURL), false, false),
 			},
 			nil,
@@ -797,7 +844,11 @@ func (h *Handler) showInquiries(channelID, userID string) error {
 			false, false),
 	))
 
-	_, err = h.client.PostEphemeral(channelID, userID, slack.MsgOptionBlocks(blocks...))
+	_, _, err = h.client.PostMessage(
+		channelID,
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionTS(threadTS),
+	)
 	return err
 }
 
@@ -996,11 +1047,11 @@ func (h *Handler) handleReaction(done bool, timestamp string) {
 }
 
 type myEvent struct {
-	Channel         string `json:"channel"`
-	Text            string `json:"text"`
-	User            string `json:"user"`
-	TimeStamp       string `json:"ts"`
-	ThreadTimeStamp string `json:"thread_ts"`
+	Channel   string `json:"channel"`
+	Text      string `json:"text"`
+	User      string `json:"user"`
+	TimeStamp string `json:"ts"`
+	ThreadTS  string `json:"thread_ts"`
 }
 
 // メンションを受け取ったときの処理
@@ -1014,12 +1065,36 @@ func (h *Handler) handleMention(event *myEvent) {
 	// 問い合わせをリッチメッセージで投稿
 	// スレッドでメンションされたか？
 	var threadTs string
-	if event.ThreadTimeStamp != "" {
-		threadTs = event.ThreadTimeStamp
+	if event.ThreadTS != "" {
+		threadTs = event.ThreadTS
 	}
-	if messageText == "history" {
-		if err := h.showInquiries(channelID, userID); err != nil {
+	ts := event.TimeStamp
+	if event.ThreadTS != "" {
+		ts = event.ThreadTS
+
+	}
+
+	if strings.TrimSpace(messageText) == cmdHistory {
+		if err := h.showInquiries(channelID, userID, ts); err != nil {
 			slog.Error("showInquiries failed", slog.Any("err", err))
+		}
+		return
+	}
+
+	if strings.TrimSpace(messageText) == cmdSummary {
+		if h.openapi == nil {
+			if _, err := h.client.PostEphemeral(
+				channelID,
+				userID,
+				slack.MsgOptionText("OpenAI APIの設定が必要です。", false),
+			); err != nil {
+				slog.Error("Failed to post message", slog.Any("err", err))
+			}
+			return
+		}
+
+		if err := h.showSummary(channelID, userID, event.ThreadTS); err != nil {
+			slog.Error("showSummary failed", slog.Any("err", err))
 		}
 		return
 	}
@@ -1027,7 +1102,7 @@ func (h *Handler) handleMention(event *myEvent) {
 	if threadTs != "" {
 		mentionTS, err := h.firstMentionIn(
 			channelID,
-			event.ThreadTimeStamp,
+			event.ThreadTS,
 			h.getBotUserID(),
 		)
 
@@ -1052,7 +1127,7 @@ func (h *Handler) handleMention(event *myEvent) {
 					fmt.Sprintf("%s さん、回答をお待ちしています。", mention),
 					false,
 				),
-				slack.MsgOptionTS(event.ThreadTimeStamp),
+				slack.MsgOptionTS(event.ThreadTS),
 			)
 			if err != nil {
 				slog.Error("Failed to post message", slog.Any("err", err))
@@ -1075,10 +1150,11 @@ func (h *Handler) handleMention(event *myEvent) {
 	}
 
 	// ここまで来たら、通常のメニューを表示
+
 	blocks := []slack.Block{
-		newSectionBlock("section-1", "*メニューを選択してください*", "inquiry_action", "問い合わせを行う"),
-		newSectionBlock("section-2", "*問い合わせの履歴を見る*", "history_action", "履歴を見る"),
-		newSectionBlock("section-3", "*メンションの設定を行う*", "mention_action", "設定する"),
+		newSectionBlock("inq", "*メニューを選択してください*", "inquiry_action", "問い合わせを行う", ts),
+		newSectionBlock("hist", "*問い合わせの履歴を見る*", "history_action", "履歴を見る", ts),
+		newSectionBlock("mention", "*メンションの設定を行う*", "mention_action", "設定する", ts),
 	}
 
 	_, err := h.client.PostEphemeral(
@@ -1092,7 +1168,7 @@ func (h *Handler) handleMention(event *myEvent) {
 	}
 }
 
-func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionBlock {
+func newSectionBlock(blockID, text, actionID, buttonText, value string) *slack.SectionBlock {
 	return &slack.SectionBlock{
 		Type:    slack.MBTSection,
 		BlockID: blockID,
@@ -1104,7 +1180,7 @@ func newSectionBlock(blockID, text, actionID, buttonText string) *slack.SectionB
 			ButtonElement: &slack.ButtonBlockElement{
 				Type:     slack.METButton,
 				ActionID: actionID,
-				Value:    "dummy_value",
+				Value:    value,
 				Text: &slack.TextBlockObject{
 					Type: "plain_text",
 					Text: buttonText,
@@ -1183,4 +1259,142 @@ func (h *Handler) firstMentionIn(channelID, threadTs, mention string) (string, e
 		}
 	}
 	return "", nil
+}
+
+func (h *Handler) showSummary(channelID, userID, ts string) error {
+	if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *要約を取得中...*", false)); err != nil {
+		return err
+	}
+
+	inquiries, err := h.ds.GetLatestInquiries(h.getBotUserID())
+	if err != nil {
+		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
+			return err
+		}
+		return err
+	}
+	inquiryConversations := []model.InquiryConversation{}
+	for _, i := range inquiries {
+		threadMessages := []model.Conversation{}
+		serarchTS := i.Timestamp
+		if i.ThreadTS != "" {
+			serarchTS = i.ThreadTS
+		}
+		if serarchTS != "" {
+			tm, err := h.threadMessages(serarchTS, i.ChannelID)
+			if err != nil {
+				slog.Error("threadMessages failed", slog.Any("err", err))
+				if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *スレッドの取得に失敗しました*", false)); err != nil {
+					return err
+				}
+			}
+			threadMessages = tm
+		}
+
+		assingneeID := i.AssingneeID
+		if assingneeID == "" {
+			assingneeID = i.Mention
+		}
+		user, err := h.getUserInfo(assingneeID)
+		if err != nil {
+			return fmt.Errorf("GetUserInfo failed: %s %w", assingneeID, err)
+		}
+
+		inquiryConversations = append(inquiryConversations, model.InquiryConversation{
+			TimeStamp:      i.Timestamp,
+			AssingneeName:  getUserPreferredName(user),
+			InquiryContent: i.Message,
+			Conversations:  threadMessages,
+		})
+	}
+	summary, err := h.openapi.GenerateSummary(inquiryConversations)
+	if err != nil {
+		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *要約の取得に失敗しました*", false)); err != nil {
+			return err
+		}
+		return fmt.Errorf("GenerateSummary failed: %w", err)
+	}
+
+	blocks := []slack.Block{
+		slack.NewHeaderBlock(
+			slack.NewTextBlockObject("plain_text", "📜 問い合わせ要約", false, false),
+		),
+		slack.NewDividerBlock(),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "*要約内容:*", false, false),
+			nil,
+			nil,
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", summary, false, false),
+			nil,
+			nil,
+		),
+	}
+	if _, _, err := h.client.PostMessage(
+		channelID,
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionTS(userID),
+		slack.MsgOptionTS(ts),
+	); err != nil {
+		slog.Error("PostMessage failed summary", slog.Any("err", err), slog.String("summary", summary))
+		return fmt.Errorf("PostMessage failed: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) threadMessages(ts, channelID string) ([]model.Conversation, error) {
+	var conversations []model.Conversation
+
+	replies, _, _, err := h.client.GetConversationReplies(&slack.GetConversationRepliesParameters{
+		ChannelID: channelID,
+		Timestamp: ts,
+		Inclusive: true,
+		Limit:     100,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("スレッド取得に失敗しました (channel=%s, parentTS=%s): %w",
+			channelID, ts, err)
+	}
+
+	for _, msg := range replies {
+		userName := msg.User
+		t, err := parseSlackTimestamp(msg.Timestamp)
+		if err != nil {
+			return nil, fmt.Errorf("parseSlackTimestamp failed: %w", err)
+		}
+		conversations = append(conversations, model.Conversation{
+			TimeStamp: t,
+			User:      userName,
+			Text:      msg.Text,
+		})
+	}
+	slog.Info("threads", slog.Any("channelID", channelID), slog.Any("ts", ts), slog.Any("count", len(conversations)))
+
+	return conversations, nil
+}
+
+func parseSlackTimestamp(ts string) (time.Time, error) {
+	parts := strings.Split(ts, ".")
+	if len(parts) != 2 {
+		return time.Time{}, fmt.Errorf("invalid timestamp format: %s", ts)
+	}
+
+	sec, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	fracPart := parts[1] + strings.Repeat("0", 9-len(parts[1])) // nanosecond補正
+	nsec, err := strconv.ParseInt(fracPart, 10, 64)
+	if err != nil {
+		return time.Time{}, err
+	}
+
+	loc, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		loc = time.UTC
+	}
+	return time.Unix(sec, nsec).In(loc), nil
 }

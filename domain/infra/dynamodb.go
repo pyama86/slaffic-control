@@ -192,16 +192,17 @@ func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
 	input := &dynamodb.PutItemInput{
 		TableName: aws.String(inquiryTableName),
 		Item: map[string]types.AttributeValue{
-			"bot_id":     &types.AttributeValueMemberS{Value: inquiry.BotID},
-			"user_id":    &types.AttributeValueMemberS{Value: inquiry.UserID},
-			"mention":    &types.AttributeValueMemberS{Value: inquiry.Mention},
-			"timestamp":  &types.AttributeValueMemberS{Value: inquiry.Timestamp},
-			"thread_ts":  &types.AttributeValueMemberS{Value: inquiry.ThreadTS},
-			"channel_id": &types.AttributeValueMemberS{Value: inquiry.ChannelID},
-			"done":       &types.AttributeValueMemberN{Value: strconv.Itoa(done)},
-			"created_at": &types.AttributeValueMemberS{Value: timeNow().Format(time.RFC3339)},
-			"done_at":    &types.AttributeValueMemberS{Value: ""},
-			"message":    &types.AttributeValueMemberS{Value: inquiry.Message},
+			"bot_id":       &types.AttributeValueMemberS{Value: inquiry.BotID},
+			"user_id":      &types.AttributeValueMemberS{Value: inquiry.UserID},
+			"mention":      &types.AttributeValueMemberS{Value: inquiry.Mention},
+			"assingnee_id": &types.AttributeValueMemberS{Value: inquiry.AssingneeID},
+			"timestamp":    &types.AttributeValueMemberS{Value: inquiry.Timestamp},
+			"thread_ts":    &types.AttributeValueMemberS{Value: inquiry.ThreadTS},
+			"channel_id":   &types.AttributeValueMemberS{Value: inquiry.ChannelID},
+			"done":         &types.AttributeValueMemberN{Value: strconv.Itoa(done)},
+			"created_at":   &types.AttributeValueMemberS{Value: timeNow().Format(time.RFC3339)},
+			"done_at":      &types.AttributeValueMemberS{Value: ""},
+			"message":      &types.AttributeValueMemberS{Value: inquiry.Message},
 		},
 	}
 
@@ -244,14 +245,15 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 			return nil, fmt.Errorf("failed to parse done: %v", err)
 		}
 		inquiry := model.Inquiry{
-			Timestamp: getStringValue(item, "timestamp"),
-			ThreadTS:  getStringValue(item, "thread_ts"),
-			UserID:    getStringValue(item, "user_id"),
-			Mention:   getStringValue(item, "mention"),
-			Message:   getStringValue(item, "message"),
-			ChannelID: getStringValue(item, "channel_id"),
-			CreatedAt: createdAt,
-			Done:      done == 1,
+			Timestamp:   getStringValue(item, "timestamp"),
+			ThreadTS:    getStringValue(item, "thread_ts"),
+			UserID:      getStringValue(item, "user_id"),
+			Mention:     getStringValue(item, "mention"),
+			AssingneeID: getStringValue(item, "assingnee_id"),
+			Message:     getStringValue(item, "message"),
+			ChannelID:   getStringValue(item, "channel_id"),
+			CreatedAt:   createdAt,
+			Done:        done == 1,
 		}
 		inquiries = append(inquiries, inquiry)
 	}
@@ -370,16 +372,17 @@ func (d *DynamoDB) GetInquiry(botID, ts string) (*model.Inquiry, error) {
 	}
 
 	inquiry := model.Inquiry{
-		BotID:     getStringValue(result.Item, "bot_id"),
-		Message:   getStringValue(result.Item, "message"),
-		ChannelID: getStringValue(result.Item, "channel_id"),
-		Timestamp: getStringValue(result.Item, "timestamp"),
-		ThreadTS:  getStringValue(result.Item, "thread_ts"),
-		UserID:    getStringValue(result.Item, "user_id"),
-		Mention:   getStringValue(result.Item, "mention"),
-		CreatedAt: createdAt,
-		DoneAt:    doneAt,
-		Done:      done == 1,
+		BotID:       getStringValue(result.Item, "bot_id"),
+		Message:     getStringValue(result.Item, "message"),
+		ChannelID:   getStringValue(result.Item, "channel_id"),
+		Timestamp:   getStringValue(result.Item, "timestamp"),
+		ThreadTS:    getStringValue(result.Item, "thread_ts"),
+		UserID:      getStringValue(result.Item, "user_id"),
+		Mention:     getStringValue(result.Item, "mention"),
+		AssingneeID: getStringValue(result.Item, "assingnee_id"),
+		CreatedAt:   createdAt,
+		DoneAt:      doneAt,
+		Done:        done == 1,
 	}
 
 	return &inquiry, nil
