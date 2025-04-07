@@ -842,7 +842,7 @@ func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 	// コンテキスト（履歴の上限について）
 	blocks = append(blocks, slack.NewContextBlock("",
 		slack.NewTextBlockObject("mrkdwn",
-			"📌 *最新 10 件の履歴を表示しています*",
+			fmt.Sprintf("📌 *最新 %d 件の履歴を表示しています*", len(inquiries)),
 			false, false),
 	))
 
