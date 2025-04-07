@@ -803,7 +803,7 @@ func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 			// ユーザーIDから名前を取得
 			if strings.TrimPrefix(assingneeID, "<!subteam^") == "" {
 				// ユーザーグループのメンション
-				userID := strings.TrimPrefix(assingneeID, "<!subteam^")
+				userID = strings.TrimPrefix(assingneeID, "<!subteam^")
 				userID = strings.TrimSuffix(userID, ">")
 			} else if strings.HasPrefix(assingneeID, "<@") {
 				userID = strings.TrimPrefix(assingneeID, "<@")
