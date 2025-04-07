@@ -958,7 +958,12 @@ func (h *Handler) rotateMentions() {
 	// 全員のハンドルネームを取得
 	allMentions := []string{}
 	for _, id := range rotated {
-		allMentions = append(allMentions, h.lookupRealNameOrHandle(id))
+		name, err := h.lookupRealNameOrHandle(id)
+		if err != nil {
+			slog.Error("Failed to lookup real name or handle", slog.Any("err", err), slog.String("id", id))
+			continue
+		}
+		allMentions = append(allMentions, name)
 	}
 
 	// 🎨 Block Kit メッセージ構築
@@ -1005,27 +1010,26 @@ func (h *Handler) rotateMentions() {
 }
 
 // lookupRealNameOrHandle: "Uxxxx" or "Sxxxx" をユーザー/グループ名に変換
-func (h *Handler) lookupRealNameOrHandle(id string) string {
+func (h *Handler) lookupRealNameOrHandle(id string) (string, error) {
 	if strings.HasPrefix(id, "U") {
 		// user
 		u, err := h.getUserInfo(id)
-
 		if err != nil {
-			return id
+			return "", err
 		}
-		return u.RealName
+		return getUserPreferredName(u), nil
 	} else if strings.HasPrefix(id, "S") {
 		groups, err := h.getUserGroups()
 		if err != nil {
-			return id
+			return "", err
 		}
 		for _, g := range groups {
 			if g.ID == id {
-				return g.Handle
+				return g.Handle, nil
 			}
 		}
 	}
-	return id
+	return id, nil
 }
 
 func (h *Handler) getBotUserID() string {
@@ -1277,10 +1281,7 @@ func (h *Handler) showSummary(channelID, userID, ts string) error {
 
 	inquiries, err := h.ds.GetLatestInquiries(h.getBotUserID())
 	if err != nil {
-		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *問い合わせ履歴の取得に失敗しました*", false)); err != nil {
-			return err
-		}
-		return err
+		return fmt.Errorf("GetLatestInquiries failed: %w", err)
 	}
 	inquiryConversations := []model.InquiryConversation{}
 	for _, i := range inquiries {
@@ -1292,10 +1293,7 @@ func (h *Handler) showSummary(channelID, userID, ts string) error {
 		if serarchTS != "" {
 			tm, err := h.threadMessages(serarchTS, i.ChannelID)
 			if err != nil {
-				slog.Error("threadMessages failed", slog.Any("err", err))
-				if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *スレッドの取得に失敗しました*", false)); err != nil {
-					return err
-				}
+				return fmt.Errorf("threadMessages failed: %w", err)
 			}
 			threadMessages = tm
 		}
@@ -1306,23 +1304,20 @@ func (h *Handler) showSummary(channelID, userID, ts string) error {
 		}
 
 		assingneeID = stripMentionID(assingneeID)
-		user, err := h.getUserInfo(assingneeID)
+		name, err := h.lookupRealNameOrHandle(assingneeID)
 		if err != nil {
-			return fmt.Errorf("GetUserInfo failed: %s %w", assingneeID, err)
+			return fmt.Errorf("lookupRealNameOrHandle failed: %w", err)
 		}
 
 		inquiryConversations = append(inquiryConversations, model.InquiryConversation{
 			TimeStamp:      i.Timestamp,
-			AssingneeName:  getUserPreferredName(user),
+			AssingneeName:  name,
 			InquiryContent: i.Message,
 			Conversations:  threadMessages,
 		})
 	}
 	summary, err := h.openapi.GenerateSummary(inquiryConversations)
 	if err != nil {
-		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📭 *要約の取得に失敗しました*", false)); err != nil {
-			return err
-		}
 		return fmt.Errorf("GenerateSummary failed: %w", err)
 	}
 
@@ -1348,7 +1343,6 @@ func (h *Handler) showSummary(channelID, userID, ts string) error {
 		slack.MsgOptionTS(userID),
 		slack.MsgOptionTS(ts),
 	); err != nil {
-		slog.Error("PostMessage failed summary", slog.Any("err", err), slog.String("summary", summary))
 		return fmt.Errorf("PostMessage failed: %w", err)
 	}
 
