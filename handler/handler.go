@@ -743,6 +743,22 @@ func findGroupHandleByID(gid string, groups []slack.UserGroup) string {
 	return ""
 }
 
+func stripMentionID(mention string) string {
+	userID := mention
+	if strings.HasPrefix(mention, "<") {
+		// ユーザーIDから名前を取得
+		if strings.TrimPrefix(mention, "<!subteam^") == "" {
+			// ユーザーグループのメンション
+			userID = strings.TrimPrefix(mention, "<!subteam^")
+			userID = strings.TrimSuffix(userID, ">")
+		} else if strings.HasPrefix(mention, "<@") {
+			userID = strings.TrimPrefix(mention, "<@")
+			userID = strings.TrimSuffix(userID, ">")
+		}
+	}
+	return userID
+}
+
 func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 	inquiries, err := h.ds.GetLatestInquiries(h.getBotUserID())
 	if err != nil {
@@ -799,16 +815,8 @@ func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 
 		if strings.HasPrefix(assingneeID, "S") || strings.HasPrefix(assingneeID, "G") {
 			userID = assingneeID
-		} else if strings.HasPrefix(assingneeID, "<@") {
-			// ユーザーIDから名前を取得
-			if strings.TrimPrefix(assingneeID, "<!subteam^") == "" {
-				// ユーザーグループのメンション
-				userID = strings.TrimPrefix(assingneeID, "<!subteam^")
-				userID = strings.TrimSuffix(userID, ">")
-			} else if strings.HasPrefix(assingneeID, "<@") {
-				userID = strings.TrimPrefix(assingneeID, "<@")
-				userID = strings.TrimSuffix(userID, ">")
-			}
+		} else if strings.HasPrefix(assingneeID, "<") {
+			userID = stripMentionID(assingneeID)
 		}
 		if userID != "" {
 			pc, err := h.getUserInfo(userID)
@@ -1095,6 +1103,13 @@ func (h *Handler) handleMention(event *myEvent) {
 
 		if err := h.showSummary(channelID, userID, event.ThreadTS); err != nil {
 			slog.Error("showSummary failed", slog.Any("err", err))
+			if _, err := h.client.PostEphemeral(
+				channelID,
+				userID,
+				slack.MsgOptionText("要約の取得に失敗しました。", false),
+			); err != nil {
+				slog.Error("Failed to post message", slog.Any("err", err))
+			}
 		}
 		return
 	}
@@ -1295,6 +1310,8 @@ func (h *Handler) showSummary(channelID, userID, ts string) error {
 		if assingneeID == "" {
 			assingneeID = i.Mention
 		}
+
+		assingneeID = stripMentionID(assingneeID)
 		user, err := h.getUserInfo(assingneeID)
 		if err != nil {
 			return fmt.Errorf("GetUserInfo failed: %s %w", assingneeID, err)
