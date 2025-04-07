@@ -1082,6 +1082,17 @@ func (h *Handler) handleMention(event *myEvent) {
 	}
 
 	if strings.TrimSpace(messageText) == cmdSummary {
+		if h.openapi == nil {
+			if _, err := h.client.PostEphemeral(
+				channelID,
+				userID,
+				slack.MsgOptionText("OpenAI APIの設定が必要です。", false),
+			); err != nil {
+				slog.Error("Failed to post message", slog.Any("err", err))
+			}
+			return
+		}
+
 		if err := h.showSummary(channelID, userID, event.ThreadTS); err != nil {
 			slog.Error("showSummary failed", slog.Any("err", err))
 		}

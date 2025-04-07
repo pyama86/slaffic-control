@@ -16,6 +16,9 @@ type OpenAI struct {
 }
 
 func NewOpenAI() (*OpenAI, error) {
+	if os.Getenv("OPENAI_API_KEY") == "" && os.Getenv("AZURE_OPENAI_KEY") == "" {
+		return nil, nil
+	}
 	client, err := newOpenAIClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize OpenAI client: %w", err)
