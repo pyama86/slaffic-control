@@ -747,7 +747,7 @@ func stripMentionID(mention string) string {
 	userID := mention
 	if strings.HasPrefix(mention, "<") {
 		// ユーザーIDから名前を取得
-		if strings.TrimPrefix(mention, "<!subteam^") == "" {
+		if strings.HasPrefix(mention, "<!subteam^") {
 			// ユーザーグループのメンション
 			userID = strings.TrimPrefix(mention, "<!subteam^")
 			userID = strings.TrimSuffix(userID, ">")
@@ -797,8 +797,9 @@ func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 		}
 		// 投稿者名の取得（メンションが飛ばないように）
 		postedBy := "不明"
-		user, err := h.getUserInfo(i.UserID)
-		if err == nil {
+		userID := stripMentionID(i.UserID)
+		user, err := h.getUserInfo(userID)
+		if err == nil && user != nil {
 			postedBy = getUserPreferredName(user)
 		} else {
 			slog.Error("GetUserInfo failed %s %s", slog.Any("err", err), slog.Any("userID", i.UserID))
@@ -811,18 +812,11 @@ func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 			assingneeID = i.Mention
 		}
 		personInChage := assingneeID
-		userID := assingneeID
-
-		if strings.HasPrefix(assingneeID, "S") || strings.HasPrefix(assingneeID, "G") {
-			userID = assingneeID
-		} else if strings.HasPrefix(assingneeID, "<") {
-			userID = stripMentionID(assingneeID)
+		pc, err := h.getUserInfo(stripMentionID(assingneeID))
+		if err != nil {
+			slog.Error("GetUserInfo failed", slog.Any("err", err), slog.Any("userID", assingneeID))
 		}
-		if userID != "" {
-			pc, err := h.getUserInfo(userID)
-			if err != nil {
-				slog.Error("GetUserInfo failed", slog.Any("err", err), slog.Any("userID", userID))
-			}
+		if pc != nil {
 			personInChage = getUserPreferredName(pc)
 		}
 
