@@ -222,7 +222,7 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 			":done":   &types.AttributeValueMemberN{Value: "0"},
 		},
 		ScanIndexForward: aws.Bool(false), // 降順（最新の created_at から取得）
-		Limit:            aws.Int32(10),
+		Limit:            aws.Int32(showInquiriesLimit),
 	}
 
 	result, err := d.db.Query(context.TODO(), input)

@@ -50,7 +50,7 @@ func (d *DataBase) UpdateMentionSetting(id string, setting *model.MentionSetting
 
 func (d *DataBase) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 	var inquiries []model.Inquiry
-	err := d.db.Where("bot_id = ? AND done = ?", botID, false).Order("created_at desc").Limit(10).Find(&inquiries).Error
+	err := d.db.Where("bot_id = ? AND done = ?", botID, false).Order("created_at desc").Limit(showInquiriesLimit).Find(&inquiries).Error
 	return inquiries, err
 }
 

@@ -129,7 +129,7 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 	assert.NoError(t, err)
 	h.client = api
 
-	for i := 0; i < 11; i++ {
+	for i := 0; i < 21; i++ {
 		_ = h.ds.SaveInquiry(&model.Inquiry{
 			BotID:     botID,
 			Message:   fmt.Sprintf("message #%d", i),
@@ -173,7 +173,7 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 			}
 		}
 	}
-	assert.Equal(t, 10, inquiryCount, "最新10件のみ表示されるはず")
+	assert.Equal(t, 20, inquiryCount, "最新20件のみ表示されるはず")
 }
 
 func randomString(n int) string {
@@ -240,7 +240,7 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 	h.client = api
 
 	// 11 件の問い合わせを作成
-	for i := 0; i < 11; i++ {
+	for i := 0; i < 21; i++ {
 		_ = h.ds.SaveInquiry(&model.Inquiry{
 			BotID:     botID,
 			Message:   fmt.Sprintf("message #%d", i),
@@ -291,8 +291,8 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 		}
 	}
 
-	// 11件中 3件を "done" にしたので、表示されるのは 8件のはず
-	assert.Equal(t, 8, inquiryCount, "未完了の問い合わせのみ表示されるべき")
+	// 21件中 3件を "done" にしたので、表示されるのは 8件のはず
+	assert.Equal(t, 18, inquiryCount, "未完了の問い合わせのみ表示されるべき")
 }
 
 func TestHandler_handleMention(t *testing.T) {
