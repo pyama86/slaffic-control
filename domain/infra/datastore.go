@@ -6,7 +6,7 @@ import (
 	"github.com/pyama86/slaffic-control/domain/model"
 )
 
-const showInquiriesLimit = 20
+const showInquiriesLimit = 15
 
 type Datastore interface {
 	// 問い合わせを保存する
