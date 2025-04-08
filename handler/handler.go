@@ -182,6 +182,14 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 			}
 		}
 
+		if _, _, err := h.client.DeleteMessage(
+			callback.Channel.ID,
+			callback.Message.Timestamp,
+		); err != nil {
+			slog.Error("DeleteMessage failed", slog.Any("err", err))
+			return
+		}
+
 	case slack.InteractionTypeViewSubmission:
 		user, err := h.getUserInfo(callback.User.ID)
 		if err != nil {
