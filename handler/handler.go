@@ -819,14 +819,12 @@ func (h *Handler) showInquiries(channelID, userID, threadTS string) error {
 		if assingneeID == "" {
 			assingneeID = i.Mention
 		}
-		personInChage := assingneeID
-		pc, err := h.getUserInfo(stripMentionID(assingneeID))
+
+		pc, err := h.lookupRealNameOrHandle(stripMentionID(assingneeID))
 		if err != nil {
 			slog.Error("GetUserInfo failed", slog.Any("err", err), slog.Any("userID", assingneeID))
 		}
-		if pc != nil {
-			personInChage = getUserPreferredName(pc)
-		}
+		personInChage := pc
 
 		blocks = append(blocks, slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn", "📅 *問い合わせ日時:* "+t, false, false),
