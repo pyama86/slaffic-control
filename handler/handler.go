@@ -1449,14 +1449,37 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%d分", m)
 }
 
-// 週の開始日（月曜日）を取得する関数
+// 週の開始日を取得する関数
 func getWeekStartDate(t time.Time) time.Time {
-	weekday := int(t.Weekday())
-	if weekday == 0 { // 日曜日の場合
-		weekday = 7
+	// 環境変数から週の開始曜日を取得（0=日,1=月,...,6=土）
+	dayStr := os.Getenv("STATS_DAY")
+	if dayStr == "" {
+		dayStr = "1" // デフォルトは月曜日
 	}
-	// 月曜日まで戻る
-	return time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, t.Location())
+	startDay, err := strconv.Atoi(dayStr)
+	if err != nil || startDay < 0 || startDay > 6 {
+		slog.Error("Invalid STATS_DAY", slog.Any("day", dayStr))
+		startDay = 1 // エラーの場合は月曜日をデフォルトとする
+	}
+
+	weekday := int(t.Weekday())
+
+	// 日曜日は0、他の曜日は1-6なので、計算を合わせる
+	if startDay == 0 { // 開始日が日曜日の場合
+		if weekday == 0 { // 現在の日が日曜日
+			return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
+		}
+		// 前の日曜日まで戻る
+		return time.Date(t.Year(), t.Month(), t.Day()-weekday, 0, 0, 0, 0, t.Location())
+	} else {
+		// 開始日が月曜日〜土曜日の場合
+		if weekday == 0 { // 現在の日が日曜日
+			weekday = 7
+		}
+		// 指定された開始曜日まで戻る
+		daysToSubtract := (weekday - startDay + 7) % 7
+		return time.Date(t.Year(), t.Month(), t.Day()-daysToSubtract, 0, 0, 0, 0, t.Location())
+	}
 }
 
 // 統計情報を計算する関数
