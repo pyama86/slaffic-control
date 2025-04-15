@@ -387,3 +387,78 @@ func (d *DynamoDB) GetInquiry(botID, ts string) (*model.Inquiry, error) {
 
 	return &inquiry, nil
 }
+
+func (d *DynamoDB) GetMonthlyInquiries(botID string, endDate time.Time) ([]model.Inquiry, error) {
+	var inquiries []model.Inquiry
+	startDate := endDate.AddDate(0, -1, 0) // 1ヶ月前
+
+	// 直近の200件を上限として取得
+	const maxItems = 200
+
+	// botIDでクエリして最新の200件を取得
+	input := &dynamodb.QueryInput{
+		TableName:              aws.String(inquiryTableName),
+		KeyConditionExpression: aws.String("bot_id = :bot_id"),
+		ExpressionAttributeValues: map[string]types.AttributeValue{
+			":bot_id": &types.AttributeValueMemberS{Value: botID},
+		},
+		ScanIndexForward: aws.Bool(false), // 降順（最新の created_at から取得）
+		Limit:            aws.Int32(maxItems),
+	}
+
+	result, err := d.db.Query(context.TODO(), input)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, item := range result.Items {
+		createdAtStr := getStringValue(item, "created_at")
+		if createdAtStr == "" {
+			continue
+		}
+		createdAt, err := time.Parse(time.RFC3339, createdAtStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse created_at (%s): %v", createdAtStr, err)
+		}
+
+		// 日付範囲でフィルタリング
+		if createdAt.Before(startDate) || createdAt.After(endDate) {
+			continue
+		}
+
+		done, err := getNumberValue(item, "done")
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse done: %v", err)
+		}
+
+		doneAt := time.Time{}
+		doneAtStr := getStringValue(item, "done_at")
+		if doneAtStr != "" {
+			doneAt, err = time.Parse(time.RFC3339, doneAtStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse done_at (%s): %v", doneAtStr, err)
+			}
+		}
+
+		inquiry := model.Inquiry{
+			BotID:       getStringValue(item, "bot_id"),
+			Timestamp:   getStringValue(item, "timestamp"),
+			ThreadTS:    getStringValue(item, "thread_ts"),
+			UserID:      getStringValue(item, "user_id"),
+			Mention:     getStringValue(item, "mention"),
+			AssingneeID: getStringValue(item, "assingnee_id"),
+			Message:     getStringValue(item, "message"),
+			ChannelID:   getStringValue(item, "channel_id"),
+			CreatedAt:   createdAt,
+			DoneAt:      doneAt,
+			Done:        done == 1,
+		}
+		inquiries = append(inquiries, inquiry)
+	}
+
+	// 作成日時の降順でソート
+	sort.Slice(inquiries, func(i, j int) bool {
+		return inquiries[i].CreatedAt.After(inquiries[j].CreatedAt)
+	})
+	return inquiries, nil
+}

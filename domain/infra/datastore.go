@@ -17,6 +17,8 @@ type Datastore interface {
 	UpdateInquiryDone(string, string, bool) error
 	// 問い合わせを検索する
 	GetInquiry(string, string) (*model.Inquiry, error)
+	// 過去一ヶ月の問い合わせを取得する
+	GetMonthlyInquiries(string, time.Time) ([]model.Inquiry, error)
 
 	// メンション設定を1件取得する
 	GetMentionSetting(string) (*model.MentionSetting, error)
