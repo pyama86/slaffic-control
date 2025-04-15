@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,6 +23,7 @@ var defaultChannel = os.Getenv("DEFAULT_CHANNEL")
 const (
 	cmdHistory = "history"
 	cmdSummary = "summary"
+	cmdStats   = "stats"
 )
 
 type Handler struct {
@@ -1118,6 +1120,20 @@ func (h *Handler) handleMention(event *myEvent) {
 		return
 	}
 
+	if strings.TrimSpace(messageText) == cmdStats {
+		if err := h.showStats(channelID, userID, ts); err != nil {
+			slog.Error("showStats failed", slog.Any("err", err))
+			if _, err := h.client.PostEphemeral(
+				channelID,
+				userID,
+				slack.MsgOptionText("統計情報の取得に失敗しました。", false),
+			); err != nil {
+				slog.Error("Failed to post message", slog.Any("err", err))
+			}
+		}
+		return
+	}
+
 	if threadTs != "" {
 		mentionTS, err := h.firstMentionIn(
 			channelID,
@@ -1408,4 +1424,311 @@ func parseSlackTimestamp(ts string) (time.Time, error) {
 		loc = time.UTC
 	}
 	return time.Unix(sec, nsec).In(loc), nil
+}
+
+// 週ごとの統計情報を格納する構造体
+type WeeklyStats struct {
+	StartDate      time.Time
+	EndDate        time.Time
+	Count          int
+	ResolvedCount  int
+	AvgResolveTime time.Duration
+	AssigneeStats  map[string]int // 担当者名 -> 件数
+}
+
+// 時間を読みやすい形式に変換する関数
+func formatDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	h := d / time.Hour
+	d -= h * time.Hour
+	m := d / time.Minute
+
+	if h > 0 {
+		return fmt.Sprintf("%d時間%d分", h, m)
+	}
+	return fmt.Sprintf("%d分", m)
+}
+
+// 週の開始日（月曜日）を取得する関数
+func getWeekStartDate(t time.Time) time.Time {
+	weekday := int(t.Weekday())
+	if weekday == 0 { // 日曜日の場合
+		weekday = 7
+	}
+	// 月曜日まで戻る
+	return time.Date(t.Year(), t.Month(), t.Day()-weekday+1, 0, 0, 0, 0, t.Location())
+}
+
+// 統計情報を計算する関数
+func (h *Handler) calculateStats(inquiries []model.Inquiry) ([]WeeklyStats, error) {
+	// 問い合わせが空の場合
+	if len(inquiries) == 0 {
+		return []WeeklyStats{}, nil
+	}
+
+	// 週ごとにグループ化
+	weekMap := make(map[string]*WeeklyStats)
+
+	for _, inquiry := range inquiries {
+		// 週の開始日を取得
+		weekStart := getWeekStartDate(inquiry.CreatedAt)
+		weekEnd := weekStart.AddDate(0, 0, 6) // 週の終了日（日曜日）
+
+		weekKey := weekStart.Format("2006-01-02")
+
+		// 週のデータがなければ初期化
+		if _, exists := weekMap[weekKey]; !exists {
+			weekMap[weekKey] = &WeeklyStats{
+				StartDate:     weekStart,
+				EndDate:       weekEnd,
+				AssigneeStats: make(map[string]int),
+			}
+		}
+
+		// 件数をカウント
+		weekMap[weekKey].Count++
+
+		// 担当者をカウント
+		assigneeID := inquiry.AssingneeID
+		if assigneeID == "" {
+			assigneeID = inquiry.Mention
+		}
+
+		if assigneeID != "" {
+			assigneeName, err := h.lookupRealNameOrHandle(stripMentionID(assigneeID))
+			if err != nil {
+				slog.Error("lookupRealNameOrHandle failed", slog.Any("err", err), slog.Any("assigneeID", assigneeID))
+				assigneeName = "不明"
+			}
+			weekMap[weekKey].AssigneeStats[assigneeName]++
+		}
+
+		// 完了している問い合わせの場合、対応時間を計算
+		if inquiry.Done && !inquiry.DoneAt.IsZero() {
+			resolveTime := inquiry.DoneAt.Sub(inquiry.CreatedAt)
+			stats := weekMap[weekKey]
+			stats.ResolvedCount++
+
+			// 平均対応時間を更新
+			currentTotal := stats.AvgResolveTime * time.Duration(stats.ResolvedCount-1)
+			newTotal := currentTotal + resolveTime
+			stats.AvgResolveTime = newTotal / time.Duration(stats.ResolvedCount)
+		}
+	}
+
+	// マップを配列に変換して日付でソート
+	var result []WeeklyStats
+	for _, stats := range weekMap {
+		result = append(result, *stats)
+	}
+
+	// 日付の降順でソート（最新の週が先頭）
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].StartDate.After(result[j].StartDate)
+	})
+
+	return result, nil
+}
+
+// 統計情報をSlackに表示する関数
+func (h *Handler) showStats(channelID, userID, threadTS string) error {
+	// 現在の日時を取得
+	endDate := timeNow()
+
+	// 過去一ヶ月の問い合わせを取得
+	inquiries, err := h.ds.GetMonthlyInquiries(h.getBotUserID(), endDate)
+	if err != nil {
+		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📊 *統計情報の取得に失敗しました*", false)); err != nil {
+			return err
+		}
+		return err
+	}
+
+	if len(inquiries) == 0 {
+		if _, err := h.client.PostEphemeral(channelID, userID, slack.MsgOptionText("📊 *過去一ヶ月の問い合わせはありません*", false)); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// 統計情報を計算
+	weeklyStats, err := h.calculateStats(inquiries)
+	if err != nil {
+		return fmt.Errorf("calculateStats failed: %w", err)
+	}
+
+	// 期間の表示用
+	startDate := endDate.AddDate(0, -1, 0)
+
+	// Block Kitを使用してリッチに表示
+	blocks := []slack.Block{
+		// ヘッダー
+		slack.NewHeaderBlock(
+			slack.NewTextBlockObject("plain_text", "📊 問い合わせ統計", false, false),
+		),
+		slack.NewDividerBlock(),
+
+		// 期間の表示
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("*📅 期間:* %s 〜 %s",
+					startDate.Format("2006/01/02"),
+					endDate.Format("2006/01/02")),
+				false, false),
+			nil, nil,
+		),
+		slack.NewDividerBlock(),
+	}
+
+	// 全体の統計情報
+	totalCount := 0
+	totalResolvedCount := 0
+	totalResolveTime := time.Duration(0)
+	allAssigneeStats := make(map[string]int)
+
+	// 週ごとの統計情報を表示
+	for _, stats := range weeklyStats {
+		// 全体の統計に加算
+		totalCount += stats.Count
+		totalResolvedCount += stats.ResolvedCount
+		totalResolveTime += stats.AvgResolveTime * time.Duration(stats.ResolvedCount)
+
+		for assignee, count := range stats.AssigneeStats {
+			allAssigneeStats[assignee] += count
+		}
+
+		// 週の期間
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("*📆 %s 〜 %s*",
+					stats.StartDate.Format("2006/01/02"),
+					stats.EndDate.Format("2006/01/02")),
+				false, false),
+			nil, nil,
+		))
+
+		// 件数
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("*📝 件数:* %d件", stats.Count),
+				false, false),
+			nil, nil,
+		))
+
+		// 平均対応時間（完了している問い合わせがある場合のみ）
+		if stats.ResolvedCount > 0 {
+			avgTimeStr := formatDuration(stats.AvgResolveTime)
+			blocks = append(blocks, slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn",
+					fmt.Sprintf("*⏱️ 平均対応時間:* %s（完了: %d/%d件）",
+						avgTimeStr, stats.ResolvedCount, stats.Count),
+					false, false),
+				nil, nil,
+			))
+		} else {
+			blocks = append(blocks, slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn",
+					"*⏱️ 平均対応時間:* 完了した問い合わせがありません",
+					false, false),
+				nil, nil,
+			))
+		}
+
+		// 担当者ごとの件数
+		if len(stats.AssigneeStats) > 0 {
+			blocks = append(blocks, slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", "*👥 担当者別:*", false, false),
+				nil, nil,
+			))
+
+			// 担当者を件数の降順でソート
+			type assigneeStat struct {
+				name  string
+				count int
+			}
+			var sortedAssignees []assigneeStat
+			for name, count := range stats.AssigneeStats {
+				sortedAssignees = append(sortedAssignees, assigneeStat{name, count})
+			}
+			sort.Slice(sortedAssignees, func(i, j int) bool {
+				return sortedAssignees[i].count > sortedAssignees[j].count
+			})
+
+			for _, as := range sortedAssignees {
+				blocks = append(blocks, slack.NewSectionBlock(
+					slack.NewTextBlockObject("mrkdwn",
+						fmt.Sprintf("👤 *%s:* %d件", as.name, as.count),
+						false, false),
+					nil, nil,
+				))
+			}
+		} else {
+			blocks = append(blocks, slack.NewSectionBlock(
+				slack.NewTextBlockObject("mrkdwn", "*👥 担当者別:* 担当者情報がありません", false, false),
+				nil, nil,
+			))
+		}
+
+		blocks = append(blocks, slack.NewDividerBlock())
+	}
+
+	// 全期間の合計・平均
+	blocks = append(blocks, slack.NewSectionBlock(
+		slack.NewTextBlockObject("mrkdwn", "*📈 全期間の統計:*", false, false),
+		nil, nil,
+	))
+
+	blocks = append(blocks, slack.NewSectionBlock(
+		slack.NewTextBlockObject("mrkdwn",
+			fmt.Sprintf("*📊 合計件数:* %d件", totalCount),
+			false, false),
+		nil, nil,
+	))
+
+	// 全体の平均対応時間
+	if totalResolvedCount > 0 {
+		avgTotalTime := totalResolveTime / time.Duration(totalResolvedCount)
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("*⏱️ 全体平均対応時間:* %s（完了: %d/%d件）",
+					formatDuration(avgTotalTime), totalResolvedCount, totalCount),
+				false, false),
+			nil, nil,
+		))
+	} else {
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				"*⏱️ 全体平均対応時間:* 完了した問い合わせがありません",
+				false, false),
+			nil, nil,
+		))
+	}
+
+	// 最も担当件数が多い担当者
+	if len(allAssigneeStats) > 0 {
+		var topAssignee string
+		var topCount int
+		for assignee, count := range allAssigneeStats {
+			if count > topCount {
+				topAssignee = assignee
+				topCount = count
+			}
+		}
+
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf("*👑 最も担当件数が多い担当者:* %s（%d件）",
+					topAssignee, topCount),
+				false, false),
+			nil, nil,
+		))
+	}
+
+	// 送信
+	_, _, err = h.client.PostMessage(
+		channelID,
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionTS(threadTS),
+	)
+	return err
 }

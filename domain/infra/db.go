@@ -3,6 +3,7 @@ package infra
 import (
 	"os"
 	"path"
+	"time"
 
 	"github.com/jinzhu/gorm"
 	_ "github.com/mattn/go-sqlite3"
@@ -67,4 +68,14 @@ func (d *DataBase) GetInquiry(botID, timestamp string) (*model.Inquiry, error) {
 		return &inquiry, nil
 	}
 	return &inquiry, err
+}
+
+func (d *DataBase) GetMonthlyInquiries(botID string, endDate time.Time) ([]model.Inquiry, error) {
+	var inquiries []model.Inquiry
+	startDate := endDate.AddDate(0, -1, 0) // 1ヶ月前
+	err := d.db.Where("bot_id = ? AND created_at BETWEEN ? AND ?",
+		botID, startDate, endDate).
+		Order("created_at desc").
+		Find(&inquiries).Error
+	return inquiries, err
 }
