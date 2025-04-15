@@ -189,21 +189,30 @@ func (d *DynamoDB) SaveInquiry(inquiry *model.Inquiry) error {
 	if inquiry.Done {
 		done = 1
 	}
+
+	item := map[string]types.AttributeValue{
+		"bot_id":       &types.AttributeValueMemberS{Value: inquiry.BotID},
+		"user_id":      &types.AttributeValueMemberS{Value: inquiry.UserID},
+		"mention":      &types.AttributeValueMemberS{Value: inquiry.Mention},
+		"assingnee_id": &types.AttributeValueMemberS{Value: inquiry.AssingneeID},
+		"timestamp":    &types.AttributeValueMemberS{Value: inquiry.Timestamp},
+		"thread_ts":    &types.AttributeValueMemberS{Value: inquiry.ThreadTS},
+		"channel_id":   &types.AttributeValueMemberS{Value: inquiry.ChannelID},
+		"done":         &types.AttributeValueMemberN{Value: strconv.Itoa(done)},
+		"created_at":   &types.AttributeValueMemberS{Value: inquiry.CreatedAt.Format(time.RFC3339)},
+		"message":      &types.AttributeValueMemberS{Value: inquiry.Message},
+	}
+
+	if inquiry.Done {
+		if inquiry.DoneAt.IsZero() {
+			inquiry.DoneAt = timeNow()
+		}
+		item["done_at"] = &types.AttributeValueMemberS{Value: inquiry.DoneAt.Format(time.RFC3339)}
+	}
+
 	input := &dynamodb.PutItemInput{
 		TableName: aws.String(inquiryTableName),
-		Item: map[string]types.AttributeValue{
-			"bot_id":       &types.AttributeValueMemberS{Value: inquiry.BotID},
-			"user_id":      &types.AttributeValueMemberS{Value: inquiry.UserID},
-			"mention":      &types.AttributeValueMemberS{Value: inquiry.Mention},
-			"assingnee_id": &types.AttributeValueMemberS{Value: inquiry.AssingneeID},
-			"timestamp":    &types.AttributeValueMemberS{Value: inquiry.Timestamp},
-			"thread_ts":    &types.AttributeValueMemberS{Value: inquiry.ThreadTS},
-			"channel_id":   &types.AttributeValueMemberS{Value: inquiry.ChannelID},
-			"done":         &types.AttributeValueMemberN{Value: strconv.Itoa(done)},
-			"created_at":   &types.AttributeValueMemberS{Value: timeNow().Format(time.RFC3339)},
-			"done_at":      &types.AttributeValueMemberS{Value: ""},
-			"message":      &types.AttributeValueMemberS{Value: inquiry.Message},
-		},
+		Item:      item,
 	}
 
 	_, err := d.db.PutItem(context.TODO(), input)
@@ -244,6 +253,16 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse done: %v", err)
 		}
+
+		doneAtStr := getStringValue(item, "done_at")
+		doneAt := time.Time{}
+		if doneAtStr != "" {
+			doneAt, err = time.Parse(time.RFC3339, doneAtStr)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse done_at (%s): %v", doneAtStr, err)
+			}
+		}
+
 		inquiry := model.Inquiry{
 			Timestamp:   getStringValue(item, "timestamp"),
 			ThreadTS:    getStringValue(item, "thread_ts"),
@@ -253,6 +272,7 @@ func (d *DynamoDB) GetLatestInquiries(botID string) ([]model.Inquiry, error) {
 			Message:     getStringValue(item, "message"),
 			ChannelID:   getStringValue(item, "channel_id"),
 			CreatedAt:   createdAt,
+			DoneAt:      doneAt,
 			Done:        done == 1,
 		}
 		inquiries = append(inquiries, inquiry)
@@ -326,7 +346,11 @@ func (d *DynamoDB) UpdateInquiryDone(botID, timestamp string, done bool) error {
 		return fmt.Errorf("inquiry not found: botID=%s, timestamp=%s", botID, timestamp)
 	}
 	inquiry.Done = done
-	inquiry.DoneAt = timeNow()
+	if done {
+		inquiry.DoneAt = timeNow()
+	} else {
+		inquiry.DoneAt = time.Time{}
+	}
 	return d.SaveInquiry(inquiry)
 }
 
