@@ -258,6 +258,9 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 		innerEvent := event.InnerEvent
 		switch ev := innerEvent.Data.(type) {
 		case *slackevents.MessageEvent:
+			if ev.Edited != nil {
+				return
+			}
 			// DMでメンションされたとき
 			if ev.ChannelType == "im" && strings.Contains(ev.Text, fmt.Sprintf("<@%s>", h.getBotUserID())) {
 				h.handleMention(&myEvent{
@@ -267,6 +270,10 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 				})
 			}
 		case *slackevents.AppMentionEvent:
+			if ev.Edited != nil {
+				return
+			}
+
 			h.handleMention(&myEvent{
 				Channel:   ev.Channel,
 				User:      ev.User,
