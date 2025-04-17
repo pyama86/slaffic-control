@@ -1279,24 +1279,23 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 	return nil
 }
 
-func (h *Handler) firstMentionIn(channelID, threadTs, mention string) (string, error) {
-	history, err := h.client.GetConversationHistory(&slack.GetConversationHistoryParameters{
+func (h *Handler) firstMentionIn(channelID, threadTs, userID string) (string, error) {
+	histries, _, _, err := h.client.GetConversationReplies(&slack.GetConversationRepliesParameters{
 		ChannelID: channelID,
+		Timestamp: threadTs,
 		Inclusive: true,
-		Latest:    threadTs,
-		Limit:     1,
-		Oldest:    threadTs,
 	})
 
 	if err != nil {
 		return "", fmt.Errorf("GetConversationHistory failed: %w", err)
 	}
-	if len(history.Messages) == 0 {
+
+	if len(histries) == 0 {
 		return "", fmt.Errorf("No messages found in thread")
 	}
 
-	for _, msg := range history.Messages {
-		if strings.Contains(msg.User, mention) || strings.Contains(msg.BotID, mention) {
+	for _, msg := range histries {
+		if strings.Contains(msg.User, userID) || strings.Contains(msg.BotID, userID) {
 			return msg.Timestamp, nil
 		}
 	}
