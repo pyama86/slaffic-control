@@ -24,6 +24,7 @@ const (
 	cmdHistory = "history"
 	cmdSummary = "summary"
 	cmdStats   = "stats"
+	cmdHelp    = "help"
 )
 
 type Handler struct {
@@ -1083,6 +1084,8 @@ func (h *Handler) handleMention(event *myEvent) {
 	// ボット自身のメンション (`@bot`) を削除
 	messageText := strings.Replace(event.Text, fmt.Sprintf("<@%s>", h.getBotUserID()), "", 1)
 	messageText = strings.TrimSpace(messageText) // 余計なスペースを削除
+	trimmedMessage := messageText                // 変数に格納
+
 	// 問い合わせをリッチメッセージで投稿
 	// スレッドでメンションされたか？
 	var threadTs string
@@ -1092,17 +1095,23 @@ func (h *Handler) handleMention(event *myEvent) {
 	ts := event.TimeStamp
 	if event.ThreadTS != "" {
 		ts = event.ThreadTS
-
 	}
 
-	if strings.TrimSpace(messageText) == cmdHistory {
+	if trimmedMessage == cmdHelp {
+		if err := h.showHelp(channelID, userID, ts); err != nil {
+			slog.Error("showHelp failed", slog.Any("err", err))
+		}
+		return
+	}
+
+	if trimmedMessage == cmdHistory {
 		if err := h.showInquiries(channelID, userID, ts); err != nil {
 			slog.Error("showInquiries failed", slog.Any("err", err))
 		}
 		return
 	}
 
-	if strings.TrimSpace(messageText) == cmdSummary {
+	if trimmedMessage == cmdSummary {
 		if h.openapi == nil {
 			if _, err := h.client.PostEphemeral(
 				channelID,
@@ -1127,7 +1136,7 @@ func (h *Handler) handleMention(event *myEvent) {
 		return
 	}
 
-	if strings.TrimSpace(messageText) == cmdStats {
+	if trimmedMessage == cmdStats {
 		if err := h.showStats(channelID, userID, ts); err != nil {
 			slog.Error("showStats failed", slog.Any("err", err))
 			if _, err := h.client.PostEphemeral(
@@ -1560,6 +1569,47 @@ func (h *Handler) calculateStats(inquiries []model.Inquiry) ([]WeeklyStats, erro
 }
 
 // 統計情報をSlackに表示する関数
+func (h *Handler) showHelp(channelID, userID, threadTS string) error {
+	blocks := []slack.Block{
+		// ヘッダー
+		slack.NewHeaderBlock(
+			slack.NewTextBlockObject("plain_text", "🔍 ヘルプ - 利用可能なコマンド", false, false),
+		),
+		slack.NewDividerBlock(),
+
+		// 各コマンドの説明
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "*`help`*: このヘルプメッセージを表示します", false, false),
+			nil, nil,
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "*`history`*: 問い合わせ履歴を表示します", false, false),
+			nil, nil,
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "*`summary`*: 問い合わせの要約を表示します", false, false),
+			nil, nil,
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", "*`stats`*: 問い合わせの統計情報を表示します", false, false),
+			nil, nil,
+		),
+		slack.NewDividerBlock(),
+
+		// 使い方の説明
+		slack.NewContextBlock("",
+			slack.NewTextBlockObject("mrkdwn", "コマンドを使用するには、`@bot-name コマンド名` と入力してください。", false, false),
+		),
+	}
+
+	_, _, err := h.client.PostMessage(
+		channelID,
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionTS(threadTS),
+	)
+	return err
+}
+
 func (h *Handler) showStats(channelID, userID, threadTS string) error {
 	// 現在の日時を取得
 	endDate := timeNow()
