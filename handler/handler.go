@@ -1241,7 +1241,6 @@ func newSectionBlock(blockID, text, actionID, buttonText, value string) *slack.S
 	}
 }
 
-// インシデントハンドラーが応募されたら、保存してハンドラに必要なことを通知する
 func (h *Handler) submitHandler(userID, channelID, ts string) error {
 	// 問い合わせを検索
 	inquiry, err := h.ds.GetInquiry(h.getBotUserID(), ts)
@@ -1252,6 +1251,7 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 	// ハンドラを保存
 	if inquiry != nil {
 		inquiry.Mention = userID
+		inquiry.AssingneeID = userID
 		if err := h.ds.SaveInquiry(inquiry); err != nil {
 			return fmt.Errorf("UpdateInquiry failed: %w", err)
 		}
