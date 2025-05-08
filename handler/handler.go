@@ -1448,7 +1448,6 @@ type WeeklyStats struct {
 	Count          int
 	ResolvedCount  int
 	AvgResolveTime time.Duration
-	AssigneeStats  map[string]int // 担当者名 -> 件数
 }
 
 // 時間を読みやすい形式に変換する関数
@@ -1517,9 +1516,8 @@ func (h *Handler) calculateStats(inquiries []model.Inquiry) ([]WeeklyStats, erro
 		// 週のデータがなければ初期化
 		if _, exists := weekMap[weekKey]; !exists {
 			weekMap[weekKey] = &WeeklyStats{
-				StartDate:     weekStart,
-				EndDate:       weekEnd,
-				AssigneeStats: make(map[string]int),
+				StartDate: weekStart,
+				EndDate:   weekEnd,
 			}
 		}
 
@@ -1530,15 +1528,6 @@ func (h *Handler) calculateStats(inquiries []model.Inquiry) ([]WeeklyStats, erro
 		assigneeID := inquiry.AssingneeID
 		if assigneeID == "" {
 			assigneeID = inquiry.Mention
-		}
-
-		if assigneeID != "" {
-			assigneeName, err := h.lookupRealNameOrHandle(stripMentionID(assigneeID))
-			if err != nil {
-				slog.Error("lookupRealNameOrHandle failed", slog.Any("err", err), slog.Any("assigneeID", assigneeID))
-				assigneeName = "不明"
-			}
-			weekMap[weekKey].AssigneeStats[assigneeName]++
 		}
 
 		// 完了している問い合わせの場合、対応時間を計算
@@ -1672,10 +1661,6 @@ func (h *Handler) showStats(channelID, userID, threadTS string) error {
 		totalResolvedCount += stats.ResolvedCount
 		totalResolveTime += stats.AvgResolveTime * time.Duration(stats.ResolvedCount)
 
-		for assignee, count := range stats.AssigneeStats {
-			allAssigneeStats[assignee] += count
-		}
-
 		// 週の期間
 		blocks = append(blocks, slack.NewSectionBlock(
 			slack.NewTextBlockObject("mrkdwn",
@@ -1709,41 +1694,6 @@ func (h *Handler) showStats(channelID, userID, threadTS string) error {
 				slack.NewTextBlockObject("mrkdwn",
 					"*⏱️ 平均対応時間:* 完了した問い合わせがありません",
 					false, false),
-				nil, nil,
-			))
-		}
-
-		// 担当者ごとの件数
-		if len(stats.AssigneeStats) > 0 {
-			blocks = append(blocks, slack.NewSectionBlock(
-				slack.NewTextBlockObject("mrkdwn", "*👥 担当者別:*", false, false),
-				nil, nil,
-			))
-
-			// 担当者を件数の降順でソート
-			type assigneeStat struct {
-				name  string
-				count int
-			}
-			var sortedAssignees []assigneeStat
-			for name, count := range stats.AssigneeStats {
-				sortedAssignees = append(sortedAssignees, assigneeStat{name, count})
-			}
-			sort.Slice(sortedAssignees, func(i, j int) bool {
-				return sortedAssignees[i].count > sortedAssignees[j].count
-			})
-
-			for _, as := range sortedAssignees {
-				blocks = append(blocks, slack.NewSectionBlock(
-					slack.NewTextBlockObject("mrkdwn",
-						fmt.Sprintf("👤 *%s:* %d件", as.name, as.count),
-						false, false),
-					nil, nil,
-				))
-			}
-		} else {
-			blocks = append(blocks, slack.NewSectionBlock(
-				slack.NewTextBlockObject("mrkdwn", "*👥 担当者別:* 担当者情報がありません", false, false),
 				nil, nil,
 			))
 		}
