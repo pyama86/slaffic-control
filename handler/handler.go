@@ -656,7 +656,7 @@ func (h *Handler) saveMentionSetting(mentionsRaw, channelID, userName string) er
 		Usernames: finalCSV,
 		CreatedAt: timeNow(),
 	}); err != nil {
-		return fmt.Errorf("Create failed: %w", err)
+		return fmt.Errorf("create failed: %w", err)
 	}
 
 	// 🔹 Block Kit メッセージ構築
@@ -1300,7 +1300,7 @@ func (h *Handler) firstMentionIn(channelID, threadTs, userID string) (string, er
 	}
 
 	if len(histries) == 0 {
-		return "", fmt.Errorf("No messages found in thread")
+		return "", fmt.Errorf("no messages found in thread")
 	}
 
 	for _, msg := range histries {
@@ -1523,12 +1523,6 @@ func (h *Handler) calculateStats(inquiries []model.Inquiry) ([]WeeklyStats, erro
 
 		// 件数をカウント
 		weekMap[weekKey].Count++
-
-		// 担当者をカウント
-		assigneeID := inquiry.AssingneeID
-		if assigneeID == "" {
-			assigneeID = inquiry.Mention
-		}
 
 		// 完了している問い合わせの場合、対応時間を計算
 		if inquiry.Done && !inquiry.DoneAt.IsZero() {

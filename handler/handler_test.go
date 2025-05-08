@@ -81,7 +81,7 @@ func TestHandler_showInquiries_SlackTest_Example(t *testing.T) {
 	server := slacktest.NewTestServer(func(c slacktest.Customize) {
 		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, err := w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			_, err := fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
 			if err != nil {
 				t.Errorf("failed to write response: %v", err)
 			}
@@ -191,7 +191,7 @@ func TestHandler_showInquiries_ExcludeDone(t *testing.T) {
 	server := slacktest.NewTestServer(func(c slacktest.Customize) {
 		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, err := w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			_, err := fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
 			if err != nil {
 				t.Errorf("failed to write response: %v", err)
 			}
@@ -303,7 +303,7 @@ func TestHandler_handleMention(t *testing.T) {
 		// /auth.test エンドポイント: botIDを返す
 		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, err := w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			_, err := fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
 			assert.NoError(t, err)
 		}))
 		// /chat.postMessage エンドポイント: 通常メッセージ投稿をキャプチャ
@@ -444,7 +444,7 @@ func TestHandler_HandleInteractions_BlockActions(t *testing.T) {
 		// /auth.test
 		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			_, err := w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+			_, err := fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
 			assert.NoError(t, err)
 
 		}))
@@ -601,7 +601,7 @@ func TestHandler_HandleInteractions_ViewSubmission(t *testing.T) {
 				// /auth.test
 				c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
-					_, err := w.Write([]byte(fmt.Sprintf(`{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)))
+					_, err := fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
 					assert.NoError(t, err)
 				}))
 

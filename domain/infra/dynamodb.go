@@ -127,7 +127,8 @@ func (d *DynamoDB) ensureSingleTable(tableName string) error {
 func (d *DynamoDB) createTable(tableName string) error {
 	var createTableInput *dynamodb.CreateTableInput
 
-	if tableName == inquiryTableName {
+	switch tableName {
+	case inquiryTableName:
 		createTableInput = &dynamodb.CreateTableInput{
 			TableName: aws.String(tableName),
 			AttributeDefinitions: []types.AttributeDefinition{
@@ -158,7 +159,7 @@ func (d *DynamoDB) createTable(tableName string) error {
 				WriteCapacityUnits: aws.Int64(5),
 			},
 		}
-	} else if tableName == mentionSettingTableName {
+	case mentionSettingTableName:
 		createTableInput = &dynamodb.CreateTableInput{
 			TableName: aws.String(tableName),
 			AttributeDefinitions: []types.AttributeDefinition{
@@ -172,7 +173,7 @@ func (d *DynamoDB) createTable(tableName string) error {
 				WriteCapacityUnits: aws.Int64(5),
 			},
 		}
-	} else {
+	default:
 		return fmt.Errorf("unknown table name: %s", tableName)
 	}
 
