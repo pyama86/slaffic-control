@@ -16,6 +16,10 @@ import (
 	gomock "go.uber.org/mock/gomock"
 )
 
+func init() {
+	defaultChannel = "test-channel"
+}
+
 func TestHandler_saveInquiry(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
@@ -733,4 +737,224 @@ func TestHandler_HandleInteractions_ViewSubmission(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_rotateMentions(t *testing.T) {
+	t.Setenv("ROTATION_MESSAGE", "%s から担当が変わります。")
+
+	// Track messages posted to Slack
+	var postMessagePayloads []map[string]interface{}
+	botID := randomString(10)
+
+	// Set up mock Slack server
+	server := slacktest.NewTestServer(func(c slacktest.Customize) {
+		// Mock auth.test endpoint
+		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
+		}))
+
+		// Mock chat.postMessage endpoint
+		c.Handle("/chat.postMessage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			channel := r.FormValue("channel")
+			text := r.FormValue("text")
+			blocksJSON := r.FormValue("blocks")
+
+			data := map[string]interface{}{
+				"channel": channel,
+				"text":    text,
+				"blocks":  blocksJSON,
+			}
+			postMessagePayloads = append(postMessagePayloads, data)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok": true, "ts": "1234567890.123456"}`))
+		}))
+
+		// Mock users.info endpoint
+		c.Handle("/users.info", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			userID := r.FormValue("user")
+
+			resp := fmt.Sprintf(`{
+				"ok": true,
+				"user": {
+					"id": "%s",
+					"name": "user%s",
+					"real_name": "User %s",
+					"profile": {
+						"display_name": "Display User %s"
+					}
+				}
+			}`, userID, userID[1:], userID[1:], userID[1:])
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(resp))
+		}))
+
+		// Mock usergroups.list endpoint
+		c.Handle("/usergroups.list", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			resp := `{
+				"ok": true,
+				"usergroups": [
+					{
+						"id": "S001",
+						"name": "Team 1",
+						"handle": "team1"
+					},
+					{
+						"id": "S002",
+						"name": "Team 2",
+						"handle": "team2"
+					}
+				]
+			}`
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(resp))
+		}))
+	})
+
+	go server.Start()
+	defer server.Stop()
+
+	// Create handler with mock Slack client
+	api := slack.New("dummy-token", slack.OptionAPIURL(server.GetAPIURL()))
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = api
+
+	// Set up test mention settings
+	testUsernames := "U001,S001,U002"
+	err = h.ds.UpdateMentionSetting(botID, &model.MentionSetting{
+		BotID:     botID,
+		Usernames: testUsernames,
+	})
+	assert.NoError(t, err)
+
+	// Execute the rotation
+	h.botID = botID // Set botID directly to avoid auth.test call
+	h.rotateMentions()
+
+	// Verify that the rotation message was sent
+	assert.GreaterOrEqual(t, len(postMessagePayloads), 2, "At least two messages should be sent")
+
+	// First message should be the rotation message with mentions
+	firstMsg := postMessagePayloads[0]
+	assert.Equal(t, "test-channel", firstMsg["channel"])
+	assert.Contains(t, firstMsg["text"], "<@U001>")
+	assert.Contains(t, firstMsg["text"], "<@U002>")
+
+	// Verify that the rotation actually happened
+	setting, err := h.ds.GetMentionSetting(botID)
+	assert.NoError(t, err)
+	assert.Equal(t, "S001,U002,U001", setting.Usernames, "Usernames should be rotated")
+}
+
+func TestHandler_rotateMentions_WithoutMessage(t *testing.T) {
+	t.Setenv("ROTATION_MESSAGE", "") // No rotation message
+
+	// Track messages posted to Slack
+	var postMessagePayloads []map[string]interface{}
+	botID := randomString(10)
+
+	// Set up mock Slack server
+	server := slacktest.NewTestServer(func(c slacktest.Customize) {
+		// Mock auth.test endpoint
+		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
+		}))
+
+		// Mock chat.postMessage endpoint
+		c.Handle("/chat.postMessage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			channel := r.FormValue("channel")
+			text := r.FormValue("text")
+			blocksJSON := r.FormValue("blocks")
+
+			data := map[string]interface{}{
+				"channel": channel,
+				"text":    text,
+				"blocks":  blocksJSON,
+			}
+			postMessagePayloads = append(postMessagePayloads, data)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok": true, "ts": "1234567890.123456"}`))
+		}))
+
+		// Mock users.info endpoint
+		c.Handle("/users.info", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			userID := r.FormValue("user")
+
+			resp := fmt.Sprintf(`{
+				"ok": true,
+				"user": {
+					"id": "%s",
+					"name": "user%s",
+					"real_name": "User %s",
+					"profile": {
+						"display_name": "Display User %s"
+					}
+				}
+			}`, userID, userID[1:], userID[1:], userID[1:])
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(resp))
+		}))
+
+		// Mock usergroups.list endpoint
+		c.Handle("/usergroups.list", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			resp := `{
+				"ok": true,
+				"usergroups": [
+					{
+						"id": "S001",
+						"name": "Team 1",
+						"handle": "team1"
+					},
+					{
+						"id": "S002",
+						"name": "Team 2",
+						"handle": "team2"
+					}
+				]
+			}`
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(resp))
+		}))
+	})
+
+	go server.Start()
+	defer server.Stop()
+
+	// Create handler with mock Slack client
+	api := slack.New("dummy-token", slack.OptionAPIURL(server.GetAPIURL()))
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = api
+
+	// Set up test mention settings
+	testUsernames := "U001,S001,U002"
+	err = h.ds.UpdateMentionSetting(botID, &model.MentionSetting{
+		BotID:     botID,
+		Usernames: testUsernames,
+	})
+	assert.NoError(t, err)
+
+	// Execute the rotation
+	h.botID = botID // Set botID directly to avoid auth.test call
+	h.rotateMentions()
+
+	// Verify that only the standard rotation message was sent (no custom message)
+	assert.Equal(t, 1, len(postMessagePayloads), "Only one message should be sent")
+
+	// Verify that the rotation actually happened
+	setting, err := h.ds.GetMentionSetting(botID)
+	assert.NoError(t, err)
+	assert.Equal(t, "S001,U002,U001", setting.Usernames, "Usernames should be rotated")
 }
