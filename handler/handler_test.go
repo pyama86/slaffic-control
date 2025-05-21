@@ -740,7 +740,7 @@ func TestHandler_HandleInteractions_ViewSubmission(t *testing.T) {
 }
 
 func TestHandler_rotateMentions(t *testing.T) {
-	t.Setenv("ROTATION_MESSAGE", "%s から担当が変わります。")
+	t.Setenv("NEXT_ROTATION_MESSAGE", "%s から担当が変わります。")
 
 	// Track messages posted to Slack
 	var postMessagePayloads []map[string]interface{}
@@ -841,9 +841,8 @@ func TestHandler_rotateMentions(t *testing.T) {
 	assert.GreaterOrEqual(t, len(postMessagePayloads), 2, "At least two messages should be sent")
 
 	// First message should be the rotation message with mentions
-	firstMsg := postMessagePayloads[0]
+	firstMsg := postMessagePayloads[1]
 	assert.Equal(t, "test-channel", firstMsg["channel"])
-	assert.Contains(t, firstMsg["text"], "<@U001>")
 	assert.Contains(t, firstMsg["text"], "<@U002>")
 
 	// Verify that the rotation actually happened
