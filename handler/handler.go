@@ -947,6 +947,35 @@ func (h *Handler) rotateMentions() {
 		return
 	}
 
+	// 環境変数からメッセージフォーマットを取得
+	rotationMessage := os.Getenv("ROTATION_MESSAGE")
+	if rotationMessage != "" && defaultChannel != "" {
+		// 全担当者のメンション文字列を生成
+		var args []interface{}
+
+		// 現在のローテーション順で全員分のメンション文字列を生成
+		for _, id := range ids {
+			var mentionStr string
+			if strings.HasPrefix(id, "U") {
+				mentionStr = fmt.Sprintf("<@%s>", id) // user mention
+			} else if strings.HasPrefix(id, "S") {
+				mentionStr = fmt.Sprintf("<!subteam^%s>", id) // group mention
+			} else {
+				mentionStr = id // 不明な形式の場合はそのまま
+			}
+			args = append(args, mentionStr)
+		}
+
+		// メッセージを生成して送信
+		message := fmt.Sprintf(rotationMessage, args...)
+		if _, _, err := h.client.PostMessage(
+			defaultChannel,
+			slack.MsgOptionText(message, false),
+		); err != nil {
+			slog.Error("Failed to post rotation message to previous assignee", slog.Any("err", err))
+		}
+	}
+
 	// 先頭を末尾へ
 	first := ids[0]
 	rotated := append(ids[1:], first)
