@@ -10,7 +10,7 @@ require (
 	github.com/jellydator/ttlcache/v3 v3.3.0
 	github.com/jinzhu/gorm v1.9.16
 	github.com/mattn/go-sqlite3 v1.14.28
-	github.com/openai/openai-go v0.1.0-beta.10
+	github.com/openai/openai-go v1.1.0
 	github.com/slack-go/slack v0.16.0
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/mock v0.5.2
