@@ -259,7 +259,7 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 		innerEvent := event.InnerEvent
 		switch ev := innerEvent.Data.(type) {
 		case *slackevents.MessageEvent:
-			if ev.Edited != nil {
+			if ev.IsEdited() {
 				return
 			}
 			// DMでメンションされたとき
