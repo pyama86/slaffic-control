@@ -11,7 +11,7 @@ require (
 	github.com/jinzhu/gorm v1.9.16
 	github.com/mattn/go-sqlite3 v1.14.28
 	github.com/openai/openai-go v1.2.0
-	github.com/slack-go/slack v0.16.0
+	github.com/slack-go/slack v0.17.0
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/mock v0.5.2
 )
@@ -31,7 +31,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.19 // indirect
 	github.com/aws/smithy-go v1.22.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/gorilla/websocket v1.4.2 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/tidwall/gjson v1.14.4 // indirect
