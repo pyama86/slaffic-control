@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.44.0
 	github.com/jellydator/ttlcache/v3 v3.4.0
 	github.com/jinzhu/gorm v1.9.16
-	github.com/mattn/go-sqlite3 v1.14.28
+	github.com/mattn/go-sqlite3 v1.14.29
 	github.com/openai/openai-go v1.10.1
 	github.com/slack-go/slack v0.17.3
 	github.com/stretchr/testify v1.10.0
