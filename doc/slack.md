@@ -2,15 +2,17 @@
 
 slackのApp Manifestを使って、Slack Appを作成します。
 
-```yaml
+```json
 {
     "display_information": {
-        "name": "slaffic-control"
+        "name": "slaffic-control",
+        "description": "your description here",
+        "background_color": "#13328f"
     },
     "features": {
         "bot_user": {
-            "display_name": "slaffic-control",
-            "always_online": false
+            "display_name": "slaffic-control-bot",
+            "always_online": true
         }
     },
     "oauth_config": {
@@ -18,29 +20,32 @@ slackのApp Manifestを使って、Slack Appを作成します。
             "bot": [
                 "app_mentions:read",
                 "chat:write",
+                "im:history",
+                "reactions:read",
                 "usergroups:read",
                 "users:read",
-                "reactions:read"
+                "channels:history",
+                "groups:history",
+                "mpim:history"
             ]
         }
     },
     "settings": {
         "event_subscriptions": {
-            "request_url": "https://your endpoint/slack/events",
             "bot_events": [
                 "app_mention",
-                "reaction_added",
-                "reaction_removed",
                 "message.im",
+                "reaction_added",
+                "reaction_removed"
             ]
         },
         "interactivity": {
-            "is_enabled": true,
-            "request_url": "https://your endpoint/slack/interactions"
+            "is_enabled": true
         },
         "org_deploy_enabled": false,
-        "socket_mode_enabled": false,
+        "socket_mode_enabled": true,
         "token_rotation_enabled": false
     }
 }
+
 ```
