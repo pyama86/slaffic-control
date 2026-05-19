@@ -1,6 +1,6 @@
 module github.com/pyama86/slaffic-control
 
-go 1.24
+go 1.25
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
@@ -11,7 +11,7 @@ require (
 	github.com/jinzhu/gorm v1.9.16
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/openai/openai-go v1.12.0
-	github.com/slack-go/slack v0.17.3
+	github.com/slack-go/slack v0.23.1
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/mock v0.6.0
 )
