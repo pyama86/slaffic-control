@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,7 @@ import (
 )
 
 var defaultChannel = os.Getenv("DEFAULT_CHANNEL")
+var rotationMode = os.Getenv("ROTATION_MODE") // weekly, daily, per_inquiry
 
 const (
 	cmdHistory = "history"
@@ -150,6 +152,12 @@ func (h *Handler) saveInquiryAndNotify(channelID, userID, priority, inputValue, 
 	); err != nil {
 		return fmt.Errorf("failed to post person in charge message: %w", err)
 	}
+
+	// per_inquiryモード: 問い合わせごとにサイレントローテーション
+	if rotationMode == "per_inquiry" {
+		h.rotateMentionsSilent()
+	}
+
 	return nil
 
 }
@@ -181,6 +189,11 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 		case "handler_button":
 			if err := h.submitHandler(callback.User.ID, callback.Channel.ID, action.Value); err != nil {
 				slog.Error("submitHandler failed", slog.Any("err", err))
+				return
+			}
+		case "change_handler_button":
+			if err := h.openChangeHandlerModal(callback.TriggerID, callback.Channel.ID, action.Value); err != nil {
+				slog.Error("openChangeHandlerModal failed", slog.Any("err", err))
 				return
 			}
 		}
@@ -248,6 +261,10 @@ func (h *Handler) handleInteractions(callback *slack.InteractionCallback) {
 					slog.Error("Failed to post ephemeral message", slog.Any("err", err))
 					return
 				}
+			}
+		case "change_handler_modal":
+			if err := h.submitChangeHandler(callback); err != nil {
+				slog.Error("submitChangeHandler failed", slog.Any("err", err))
 			}
 		}
 	}
@@ -484,6 +501,25 @@ func (h *Handler) personInChargeMessage(inqTs string) []slack.Block {
 				inqTs,
 				slack.NewTextBlockObject("plain_text", "👋 担当者は私です！", false, false),
 			).WithStyle(slack.StylePrimary),
+			slack.NewButtonBlockElement(
+				"change_handler_button",
+				inqTs,
+				slack.NewTextBlockObject("plain_text", "🔄 担当者を変更する", false, false),
+			),
+		),
+	}
+}
+
+// 担当者変更ボタンメッセージ（担当確定後に表示）
+func changeHandlerMessage(inqTs string) []slack.Block {
+	return []slack.Block{
+		slack.NewActionBlock(
+			"change_handler_action",
+			slack.NewButtonBlockElement(
+				"change_handler_button",
+				inqTs,
+				slack.NewTextBlockObject("plain_text", "🔄 担当者を変更する", false, false),
+			),
 		),
 	}
 }
@@ -530,6 +566,52 @@ func (h *Handler) openMentionSettingModal(triggerID, channelID string) error {
 		Close:           closeText,
 		Blocks:          blocks,
 		PrivateMetadata: channelID,
+	}
+
+	_, err = h.client.OpenView(triggerID, view)
+	return err
+}
+
+type changeHandlerMeta struct {
+	ChannelID string `json:"channel_id"`
+	InquiryTS string `json:"inquiry_ts"`
+}
+
+func (h *Handler) openChangeHandlerModal(triggerID, channelID, inquiryTS string) error {
+	titleText := slack.NewTextBlockObject("plain_text", "担当者変更", false, false)
+	submitText := slack.NewTextBlockObject("plain_text", "変更", false, false)
+	closeText := slack.NewTextBlockObject("plain_text", "キャンセル", false, false)
+
+	blocks := slack.Blocks{
+		BlockSet: []slack.Block{
+			&slack.InputBlock{
+				Type:    slack.MBTInput,
+				BlockID: "change_handler_block",
+				Label:   slack.NewTextBlockObject("plain_text", "新しい担当者", false, false),
+				Element: &slack.SelectBlockElement{
+					Type:     slack.OptTypeUser,
+					ActionID: "change_handler_select",
+				},
+			},
+		},
+	}
+
+	meta, err := json.Marshal(changeHandlerMeta{
+		ChannelID: channelID,
+		InquiryTS: inquiryTS,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to marshal metadata: %w", err)
+	}
+
+	view := slack.ModalViewRequest{
+		Type:            slack.ViewType("modal"),
+		CallbackID:      "change_handler_modal",
+		Title:           titleText,
+		Submit:          submitText,
+		Close:           closeText,
+		Blocks:          blocks,
+		PrivateMetadata: string(meta),
 	}
 
 	_, err = h.client.OpenView(triggerID, view)
@@ -887,7 +969,13 @@ func parseCSV(csv string) []string {
 }
 
 // startRotationMonitor: 日本時間の朝9時にローテーション
+// ROTATION_MODE=per_inquiry の場合はモニターを起動しない
 func (h *Handler) StartRotationMonitor() {
+	if rotationMode == "per_inquiry" {
+		slog.Info("Rotation mode is per_inquiry, skip rotation monitor")
+		return
+	}
+
 	dayStr := os.Getenv("ROTATION_DAY") // 0=日,1=月,...,6=土
 	if dayStr == "" {
 		dayStr = "1" // デフォルトは月曜日
@@ -920,11 +1008,17 @@ func (h *Handler) StartRotationMonitor() {
 			slog.Info("Next rotation", slog.Any("next", nextRotation), slog.Any("sleep", sleepDuration))
 			time.Sleep(sleepDuration)
 
-			// 今日が指定された曜日ならローテーションを実行
 			now = timeNow() // スリープ後に再取得
-			if int(now.Weekday()) == desiredDay {
-				slog.Info("Rotation time has come, start rotation")
+
+			if rotationMode == "daily" {
+				slog.Info("Daily rotation time has come, start rotation")
 				h.rotateMentions()
+			} else {
+				// weekly（デフォルト）: 指定された曜日のみ
+				if int(now.Weekday()) == desiredDay {
+					slog.Info("Rotation time has come, start rotation")
+					h.rotateMentions()
+				}
 			}
 		}
 	}()
@@ -1045,6 +1139,32 @@ func (h *Handler) rotateMentions() {
 
 	slog.Info("Rotation completed", slog.Any("new", first), slog.Any("all", allMentions))
 
+}
+
+// rotateMentionsSilent: Slack通知なしでローテーションのみ実行（per_inquiryモード用）
+func (h *Handler) rotateMentionsSilent() {
+	setting, err := h.ds.GetMentionSetting(h.getBotUserID())
+	if err != nil {
+		slog.Error("Failed to get latest mention setting", slog.Any("err", err))
+		return
+	}
+
+	if setting.BotID == "" || setting.Usernames == "" {
+		return
+	}
+
+	ids := parseCSV(setting.Usernames)
+	if len(ids) < 2 {
+		return
+	}
+
+	first := ids[0]
+	rotated := append(ids[1:], first)
+	newCSV := strings.Join(rotated, ",")
+	setting.Usernames = newCSV
+	if err := h.ds.UpdateMentionSetting(h.getBotUserID(), setting); err != nil {
+		slog.Error("Failed to save new mention setting (silent rotation)", slog.Any("err", err))
+	}
 }
 
 // lookupRealNameOrHandle: "Uxxxx" or "Sxxxx" をユーザー/グループ名に変換
@@ -1305,6 +1425,74 @@ func (h *Handler) submitHandler(userID, channelID, ts string) error {
 		slack.MsgOptionBlocks(blocks...),
 	); err != nil {
 		return fmt.Errorf("PostMessage failed: %w", err)
+	}
+
+	// 担当者変更ボタンを投稿
+	if _, _, err := h.client.PostMessage(
+		channelID,
+		slack.MsgOptionTS(ts),
+		slack.MsgOptionBlocks(changeHandlerMessage(ts)...),
+	); err != nil {
+		return fmt.Errorf("failed to post change handler message: %w", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) submitChangeHandler(callback *slack.InteractionCallback) error {
+	var meta changeHandlerMeta
+	if err := json.Unmarshal([]byte(callback.View.PrivateMetadata), &meta); err != nil {
+		return fmt.Errorf("failed to unmarshal metadata: %w", err)
+	}
+
+	newUserID := callback.View.State.Values["change_handler_block"]["change_handler_select"].SelectedUser
+
+	inquiry, err := h.ds.GetInquiry(h.getBotUserID(), meta.InquiryTS)
+	if err != nil {
+		return fmt.Errorf("GetInquiry failed: %w", err)
+	}
+
+	if inquiry != nil && inquiry.BotID != "" {
+		inquiry.Mention = newUserID
+		inquiry.AssingneeID = newUserID
+		if err := h.ds.SaveInquiry(inquiry); err != nil {
+			return fmt.Errorf("UpdateInquiry failed: %w", err)
+		}
+	}
+
+	// 変更通知を投稿
+	blocks := []slack.Block{
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject(
+				"mrkdwn",
+				fmt.Sprintf(
+					":arrows_counterclockwise: <@%s> さんが担当者を <@%s> さんに変更しました。",
+					callback.User.ID,
+					newUserID,
+				),
+				false,
+				false,
+			),
+			nil,
+			nil,
+		),
+	}
+
+	if _, _, err := h.client.PostMessage(
+		meta.ChannelID,
+		slack.MsgOptionTS(meta.InquiryTS),
+		slack.MsgOptionBlocks(blocks...),
+	); err != nil {
+		return fmt.Errorf("PostMessage failed: %w", err)
+	}
+
+	// 再度変更ボタンを投稿
+	if _, _, err := h.client.PostMessage(
+		meta.ChannelID,
+		slack.MsgOptionTS(meta.InquiryTS),
+		slack.MsgOptionBlocks(changeHandlerMessage(meta.InquiryTS)...),
+	); err != nil {
+		return fmt.Errorf("failed to post change handler message: %w", err)
 	}
 
 	return nil
