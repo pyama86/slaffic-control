@@ -12,7 +12,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.44
 	github.com/openai/openai-go v1.12.0
 	github.com/slack-go/slack v0.17.3
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	go.uber.org/mock v0.6.0
 )
 
