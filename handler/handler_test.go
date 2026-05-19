@@ -957,3 +957,202 @@ func TestHandler_rotateMentions_WithoutMessage(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "S001,U002,U001", setting.Usernames, "Usernames should be rotated")
 }
+
+func TestHandler_rotateMentionsSilent(t *testing.T) {
+	botID := randomString(10)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := infra.NewMockSlackAPI(ctrl)
+	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
+
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = mockClient
+	h.botID = botID
+
+	testUsernames := "U001,U002,U003"
+	err = h.ds.UpdateMentionSetting(botID, &model.MentionSetting{
+		BotID:     botID,
+		Usernames: testUsernames,
+	})
+	assert.NoError(t, err)
+
+	// サイレントローテーション実行
+	h.rotateMentionsSilent()
+
+	setting, err := h.ds.GetMentionSetting(botID)
+	assert.NoError(t, err)
+	assert.Equal(t, "U002,U003,U001", setting.Usernames, "サイレントローテーションで先頭が末尾に移動するはず")
+
+	// もう一回
+	h.rotateMentionsSilent()
+	setting, err = h.ds.GetMentionSetting(botID)
+	assert.NoError(t, err)
+	assert.Equal(t, "U003,U001,U002", setting.Usernames)
+}
+
+func TestHandler_rotateMentionsSilent_SingleUser(t *testing.T) {
+	botID := randomString(10)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	mockClient := infra.NewMockSlackAPI(ctrl)
+	mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
+
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = mockClient
+	h.botID = botID
+
+	// ユーザーが1人しかいない場合はローテーションしない
+	err = h.ds.UpdateMentionSetting(botID, &model.MentionSetting{
+		BotID:     botID,
+		Usernames: "U001",
+	})
+	assert.NoError(t, err)
+
+	h.rotateMentionsSilent()
+
+	setting, err := h.ds.GetMentionSetting(botID)
+	assert.NoError(t, err)
+	assert.Equal(t, "U001", setting.Usernames, "1人の場合はローテーションしない")
+}
+
+func TestHandler_perInquiryRotation(t *testing.T) {
+	origMode := rotationMode
+	rotationMode = "per_inquiry"
+	defer func() { rotationMode = origMode }()
+
+	var postMessagePayloads []map[string]interface{}
+	botID := randomString(10)
+
+	server := slacktest.NewTestServer(func(c slacktest.Customize) {
+		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
+		}))
+		c.Handle("/chat.postMessage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			data := map[string]interface{}{
+				"channel": r.FormValue("channel"),
+				"text":    r.FormValue("text"),
+				"blocks":  r.FormValue("blocks"),
+			}
+			postMessagePayloads = append(postMessagePayloads, data)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok": true, "ts": "1234567890.123456"}`))
+		}))
+	})
+
+	go server.Start()
+	defer server.Stop()
+
+	api := slack.New("dummy-token", slack.OptionAPIURL(server.GetAPIURL()))
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = api
+	h.botID = botID
+
+	// メンション設定をセットアップ
+	err = h.ds.UpdateMentionSetting(botID, &model.MentionSetting{
+		BotID:     botID,
+		Usernames: "U001,U002,U003",
+	})
+	assert.NoError(t, err)
+
+	// 問い合わせを作成
+	h.handleMention(&myEvent{
+		User:    "U111",
+		Channel: "C999",
+		Text:    fmt.Sprintf("<@%s> テスト問い合わせ", botID),
+	})
+
+	// per_inquiryモードでローテーションが実行されたか確認
+	setting, err := h.ds.GetMentionSetting(botID)
+	assert.NoError(t, err)
+	assert.Equal(t, "U002,U003,U001", setting.Usernames, "per_inquiryモードで問い合わせ後にローテーションされるはず")
+
+	// 最初の問い合わせはU001に割り当てられているはず
+	inquiries, err := h.ds.GetLatestInquiries(botID)
+	assert.NoError(t, err)
+	assert.Len(t, inquiries, 1)
+	assert.Equal(t, "U001", inquiries[0].AssingneeID)
+}
+
+func TestHandler_submitChangeHandler(t *testing.T) {
+	var postMessagePayloads []map[string]interface{}
+	botID := randomString(10)
+
+	server := slacktest.NewTestServer(func(c slacktest.Customize) {
+		c.Handle("/auth.test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"ok": true, "user_id": "%s", "team_id": "T1234"}`, botID)
+		}))
+		c.Handle("/chat.postMessage", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_ = r.ParseForm()
+			data := map[string]interface{}{
+				"channel": r.FormValue("channel"),
+				"text":    r.FormValue("text"),
+				"blocks":  r.FormValue("blocks"),
+			}
+			postMessagePayloads = append(postMessagePayloads, data)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"ok": true, "ts": "1234567890.123456"}`))
+		}))
+	})
+
+	go server.Start()
+	defer server.Stop()
+
+	api := slack.New("dummy-token", slack.OptionAPIURL(server.GetAPIURL()))
+	h, err := NewHandler()
+	assert.NoError(t, err)
+	h.client = api
+	h.botID = botID
+
+	// 問い合わせを作成
+	inqTS := "9999999999.000000"
+	err = h.ds.SaveInquiry(&model.Inquiry{
+		BotID:       botID,
+		Message:     "test inquiry",
+		Timestamp:   inqTS,
+		ChannelID:   "C999",
+		UserID:      "U111",
+		AssingneeID: "U001",
+		CreatedAt:   time.Now(),
+	})
+	assert.NoError(t, err)
+
+	// 担当者変更
+	meta := fmt.Sprintf(`{"channel_id":"C999","inquiry_ts":"%s"}`, inqTS)
+	callback := &slack.InteractionCallback{
+		Type: slack.InteractionTypeViewSubmission,
+		User: slack.User{ID: "U222"},
+		View: slack.View{
+			CallbackID:      "change_handler_modal",
+			PrivateMetadata: meta,
+			State: &slack.ViewState{
+				Values: map[string]map[string]slack.BlockAction{
+					"change_handler_block": {
+						"change_handler_select": slack.BlockAction{SelectedUser: "U333"},
+					},
+				},
+			},
+		},
+	}
+
+	err = h.submitChangeHandler(callback)
+	assert.NoError(t, err)
+
+	// 問い合わせの担当者が変更されたか確認
+	inquiry, err := h.ds.GetInquiry(botID, inqTS)
+	assert.NoError(t, err)
+	assert.Equal(t, "U333", inquiry.AssingneeID, "担当者がU333に変更されているはず")
+	assert.Equal(t, "U333", inquiry.Mention)
+
+	// 変更通知 + 変更ボタン = 2回のPostMessage
+	assert.Len(t, postMessagePayloads, 2)
+}
