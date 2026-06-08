@@ -11,7 +11,7 @@ require (
 	github.com/jinzhu/gorm v1.9.16
 	github.com/mattn/go-sqlite3 v1.14.45
 	github.com/openai/openai-go v1.12.0
-	github.com/slack-go/slack v0.23.1
+	github.com/slack-go/slack v0.25.0
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/mock v0.6.0
 )
