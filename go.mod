@@ -3,7 +3,7 @@ module github.com/pyama86/slaffic-control
 go 1.25
 
 require (
-	github.com/aws/aws-sdk-go-v2 v1.41.12
+	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.20
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.22
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.57.6
