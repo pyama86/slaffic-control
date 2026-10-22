@@ -1,4 +1,4 @@
-FROM golang:latest as builder
+FROM golang:1.27.3 as builder
 ADD . /opt/slaffic-control
 WORKDIR /opt/slaffic-control/
 ENV CGO_ENABLED=0
