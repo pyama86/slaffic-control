@@ -35,8 +35,6 @@ func main() {
 		bind = os.Getenv("LISTEN_SOCKET")
 	}
 	slog.Info("Server listening", slog.String("bind", bind))
-	if err := h.Handle(); err != nil {
-		slog.Error("Server failed", slog.Any("err", err))
-		os.Exit(1)
-	}
+	slog.Error("Server failed", slog.Any("err", h.Handle()))
+	os.Exit(1)
 }
