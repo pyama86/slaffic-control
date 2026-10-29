@@ -123,18 +123,23 @@ func (mr *MockSlackAPIMockRecorder) GetUserGroups(options ...any) *gomock.Call {
 }
 
 // GetUserInfo mocks base method.
-func (m *MockSlackAPI) GetUserInfo(userID string) (*slack.User, error) {
+func (m *MockSlackAPI) GetUserInfo(userID string, options ...slack.GetUserInfoOption) (*slack.User, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetUserInfo", userID)
+	varargs := []any{userID}
+	for _, a := range options {
+		varargs = append(varargs, a)
+	}
+	ret := m.ctrl.Call(m, "GetUserInfo", varargs...)
 	ret0, _ := ret[0].(*slack.User)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // GetUserInfo indicates an expected call of GetUserInfo.
-func (mr *MockSlackAPIMockRecorder) GetUserInfo(userID any) *gomock.Call {
+func (mr *MockSlackAPIMockRecorder) GetUserInfo(userID any, options ...any) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserInfo", reflect.TypeOf((*MockSlackAPI)(nil).GetUserInfo), userID)
+	varargs := append([]any{userID}, options...)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUserInfo", reflect.TypeOf((*MockSlackAPI)(nil).GetUserInfo), varargs...)
 }
 
 // GetUsers mocks base method.
