@@ -103,6 +103,21 @@ func (mr *MockSlackAPIMockRecorder) GetConversationReplies(params any) *gomock.C
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetConversationReplies", reflect.TypeOf((*MockSlackAPI)(nil).GetConversationReplies), params)
 }
 
+// GetReactions mocks base method.
+func (m *MockSlackAPI) GetReactions(item slack.ItemRef, params slack.GetReactionsParameters) (slack.ReactedItem, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetReactions", item, params)
+	ret0, _ := ret[0].(slack.ReactedItem)
+	ret1, _ := ret[1].(error)
+	return ret0, ret1
+}
+
+// GetReactions indicates an expected call of GetReactions.
+func (mr *MockSlackAPIMockRecorder) GetReactions(item, params any) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetReactions", reflect.TypeOf((*MockSlackAPI)(nil).GetReactions), item, params)
+}
+
 // GetUserGroups mocks base method.
 func (m *MockSlackAPI) GetUserGroups(options ...slack.GetUserGroupsOption) ([]slack.UserGroup, error) {
 	m.ctrl.T.Helper()

@@ -304,12 +304,12 @@ func (h *Handler) handleCallBack(event *slackevents.EventsAPIEvent) {
 				TimeStamp: ev.TimeStamp,
 			})
 		case *slackevents.ReactionAddedEvent:
-			if ev.Reaction == "white_check_mark" {
-				h.handleReaction(true, ev.Item.Timestamp)
+			if ev.Reaction == doneReaction {
+				h.handleReaction(ev.Item.Channel, ev.Item.Timestamp, true)
 			}
 		case *slackevents.ReactionRemovedEvent:
-			if ev.Reaction == "white_check_mark" {
-				h.handleReaction(false, ev.Item.Timestamp)
+			if ev.Reaction == doneReaction {
+				h.handleReaction(ev.Item.Channel, ev.Item.Timestamp, false)
 			}
 		}
 	default:
@@ -1207,7 +1207,22 @@ func (h *Handler) getBotUserID() string {
 	return h.botID
 }
 
-func (h *Handler) handleReaction(done bool, timestamp string) {
+const doneReaction = "white_check_mark"
+
+func (h *Handler) handleReaction(channel, timestamp string, added bool) {
+	done := added
+	item, err := h.client.GetReactions(slack.NewRefToMessage(channel, timestamp), slack.NewGetReactionsParameters())
+	if err != nil {
+		slog.Error("Failed to get reactions", slog.Any("err", err), slog.String("channel", channel), slog.String("timestamp", timestamp))
+	} else {
+		done = false
+		for _, r := range item.Reactions {
+			if r.Name == doneReaction && r.Count >= 1 {
+				done = true
+				break
+			}
+		}
+	}
 	if err := h.ds.UpdateInquiryDone(h.getBotUserID(), timestamp, done); err != nil {
 		slog.Error("Failed to update inquiry", slog.Any("err", err), slog.String("timestamp", timestamp), slog.Bool("done", done))
 	}

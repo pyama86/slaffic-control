@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -1155,4 +1156,84 @@ func TestHandler_submitChangeHandler(t *testing.T) {
 
 	// 変更通知 + 変更ボタン = 2回のPostMessage
 	assert.Len(t, postMessagePayloads, 2)
+}
+
+func TestHandler_handleReaction(t *testing.T) {
+	type step struct {
+		added     bool
+		reactions []slack.ItemReaction
+		err       error
+	}
+	check := func(count int) slack.ItemReaction { return slack.ItemReaction{Name: doneReaction, Count: count} }
+
+	tests := []struct {
+		name  string
+		steps []step
+		done  bool
+	}{
+		{"2人が付けて1人外しても完了", []step{
+			{true, []slack.ItemReaction{check(1)}, nil},
+			{true, []slack.ItemReaction{check(2)}, nil},
+			{false, []slack.ItemReaction{check(1)}, nil},
+		}, true},
+		{"2人が付けて2人とも外すと未完了", []step{
+			{true, []slack.ItemReaction{check(1)}, nil},
+			{true, []slack.ItemReaction{check(2)}, nil},
+			{false, []slack.ItemReaction{check(1)}, nil},
+			{false, nil, nil},
+		}, false},
+		{"押し直しで完了", []step{
+			{true, []slack.ItemReaction{check(1)}, nil},
+			{false, nil, nil},
+			{true, []slack.ItemReaction{check(1)}, nil},
+		}, true},
+		{"別のリアクションのみ残っていれば未完了", []step{
+			{true, []slack.ItemReaction{check(1)}, nil},
+			{false, []slack.ItemReaction{{Name: "eyes", Count: 1}}, nil},
+		}, false},
+		{"取得失敗時は追加なら完了", []step{
+			{true, nil, errors.New("boom")},
+		}, true},
+		{"取得失敗時は削除なら未完了", []step{
+			{true, []slack.ItemReaction{check(1)}, nil},
+			{false, nil, errors.New("boom")},
+		}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			botID := randomString(10)
+			channel := randomString(10)
+			ts := randomString(10)
+
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			mockClient := infra.NewMockSlackAPI(ctrl)
+			mockClient.EXPECT().AuthTest().Return(&slack.AuthTestResponse{UserID: botID}, nil).AnyTimes()
+
+			h, err := NewHandler()
+			assert.NoError(t, err)
+			h.client = mockClient
+			h.botID = botID
+
+			assert.NoError(t, h.ds.SaveInquiry(&model.Inquiry{BotID: botID, Timestamp: ts, ChannelID: channel}))
+
+			calls := make([]any, 0, len(tt.steps))
+			for _, s := range tt.steps {
+				calls = append(calls, mockClient.EXPECT().
+					GetReactions(slack.NewRefToMessage(channel, ts), slack.NewGetReactionsParameters()).
+					Return(slack.ReactedItem{Reactions: s.reactions}, s.err).Times(1))
+			}
+			gomock.InOrder(calls...)
+
+			for _, s := range tt.steps {
+				h.handleReaction(channel, ts, s.added)
+			}
+
+			inquiry, err := h.ds.GetInquiry(botID, ts)
+			assert.NoError(t, err)
+			assert.Equal(t, tt.done, inquiry.Done)
+		})
+	}
 }
